@@ -1,6 +1,8 @@
 import re
-import numpy as np
 import os
+from pathlib import Path
+import numpy as np
+import pandas as pd
 
 def load_data(closed_path, open_path, fc, atlas, strategy, gsr, icc_session=None):
     """
@@ -76,6 +78,50 @@ def load_data(closed_path, open_path, fc, atlas, strategy, gsr, icc_session=None
         cl_data_1 = np.insert(cl_data_1, 23, np.zeros_like(cl_data_2[0]), axis=0) 
 
         return cl_data_1[sub_idx[icc_session]], cl_data_2
+
+
+def load_timeseries_stack(
+    root_dir: str | Path,
+    atlas: str = "Brainnetome",
+    task: str = "rest",
+    run: str = "1",
+    strategy: str = "AROMA_aggrDenoised",
+    gsr: str = "noGSR",
+    dtype=np.float32,
+):
+    root_dir = Path(root_dir)
+
+    # Под твой пример имени файла:
+    # sub-001_task-rest_run-1_time-series_Brainnetome_strategy-AROMA_aggrDenoised-noGSR.csv
+    fname = (
+        f"sub-*_task-{task}_run-{run}_time-series_{atlas}_"
+        f"strategy-{strategy}_{gsr}.csv"
+    )
+
+    pattern = f"sub-*/time-series/{atlas}/{fname}"
+    files = sorted(root_dir.glob(pattern))  # glob по шаблону в подкаталогах [web:1][web:8]
+
+    if not files:
+        raise FileNotFoundError(f"No files found for pattern: {pattern}")
+
+    subj_ids = []
+    arrays = []
+    shape0 = None
+
+    for f in files:
+        subj_ids.append(f.parts[f.parts.index("time-series") - 2] if "time-series" in f.parts else f.parent.parent.parent.name)
+        arr = pd.read_csv(f).to_numpy(dtype=dtype)  # DataFrame -> numpy [web:6][web:9]
+
+        if shape0 is None:
+            shape0 = arr.shape
+        elif arr.shape != shape0:
+            raise ValueError(f"Shape mismatch: {f} has {arr.shape}, expected {shape0}")
+
+        arrays.append(arr)
+
+    X = np.stack(arrays, axis=0)  # (subjects, T, parcels) если CSV = T x parcels
+    return X, subj_ids, files
+
 
 
 def __load_data(closed, opened, fc, atlas, strategy, gsr, icc_session=None):

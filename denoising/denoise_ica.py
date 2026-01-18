@@ -40,12 +40,12 @@ class DenoiseAROMA:
         
         self.masker = NiftiLabelsMasker(
                             labels_img=self.atlas_labels_img,
-                            memory=".nilearn_cache",
-                            verbose=-1,
+                            memory="/data/workdir/.nilearn_cache",
+                            verbose=1,
                             standardize=False, #'zscore_sample',
                             detrend=True,
                             resampling_target='data', #'labels'
-                            n_jobs=-1)
+                            n_jobs=1)
 
     @staticmethod
     def _select_confounds(df: pd.DataFrame,
@@ -223,20 +223,6 @@ class DenoiseAROMA:
 
         return results
 
-        
-    def save_timeseries_tsv(self,
-                            roi_ts,
-                            out_csv: str | Path,
-                            subject: str,
-                            task: str | None = None,
-                            run: str | None = None) -> dict:
-        pass
-        #roi_ts, info = self.denoise_to_roi_timeseries(subject=subject, task=task, run=run)
-        #out_tsv = Path(out_tsv)
-        #out_tsv.parent.mkdir(parents=True, exist_ok=True)
-        #pd.DataFrame(roi_ts).to_csv(out_tsv, sep="\t", index=False)
-        #info["out_tsv"] = str(out_tsv)
-        #return info
 
     def _save_outputs(self, outputs, sub, run, task, folder=None):
         """
@@ -260,7 +246,7 @@ class DenoiseAROMA:
         atlases =    {116: "AAL",
                       200: "Schaefer200",
                       246: "Brainnetome",
-                      425: "HCPex"}
+                      426: "HCPex"}
         
         atlas_name = atlases[outputs.shape[1]]
         
@@ -272,9 +258,11 @@ class DenoiseAROMA:
             
         # TODO добавить в название файла GSR и smoothing
 
-        name = f'sub-{sub}_task-{task}_run-{run+1}_time-series_{atlas_name}_strategy-AROMA_{self.aroma_desc}.csv'
+        name = f'sub-{sub}_task-{task}_run-{run}_time-series_{atlas_name}_strategy-AROMA_{self.aroma_desc}-noGSR.csv'
 
         df = pd.DataFrame(outputs)
         df.to_csv(os.path.join(path_to_save, name), index=False)
+
+        print(f"-----------Saved {sub}----------------")
 
         return df

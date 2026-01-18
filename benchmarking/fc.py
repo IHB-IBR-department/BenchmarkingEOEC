@@ -1,6 +1,7 @@
 import numpy as np
 from gglasso.problem import glasso_problem 
 from nilearn.connectome import ConnectivityMeasure
+from scipy import stats
 
 
 def get_connectome(timeseries: np.ndarray,
@@ -12,8 +13,7 @@ def get_connectome(timeseries: np.ndarray,
     ----------
     timeseries : np.ndarray
         The input timeseries to compute the connectivity matrix from.
-        Input shape: (n_subjects, n_nodes, n_timepoints)
-        Glasso requires data to be z-scored.
+        Input shape: (n_subjects, n_timepoints, n_nodes)
     conn_type : str
         The type of connectivity to compute. 
         Options: 'corr', 'partial_corr', 'tang', 'glasso'.
@@ -23,6 +23,12 @@ def get_connectome(timeseries: np.ndarray,
     conn : np.ndarray
         The computed connectivity matrix.
     """
+    if isinstance(timeseries, list):
+        timeseries = np.array(timeseries)
+
+    if timeseries.ndim != 3:
+        raise ValueError(f"Input timeseries should have shape (n_subjects, n_timepoints, n_nodes), "
+                         f"but got {timeseries.shape}")
     
     if conn_type == 'corr':
         conn = ConnectivityMeasure(kind='correlation', 
@@ -43,10 +49,11 @@ def get_connectome(timeseries: np.ndarray,
                                    standardize=False).fit_transform(timeseries)
         
     elif conn_type == 'glasso':
-        conn = np.zeros_like(timeseries)
+        nsub, _, nodes = timeseries.shape
+        conn = np.zeros((nsub, nodes, nodes))
         # glasso estimates one sub at a time
-        for en, i in enumerate(timeseries):
-            conn[en] = graphicalLasso(i)
+        for sub in range(nsub):
+            conn[sub] = graphicalLasso(timeseries[sub])
     
     else:
         raise NotImplementedError
@@ -73,16 +80,16 @@ def graphicalLasso(data, L1=0.03):
         prec : precision matrix, where entries are not yet transformed into partial correlations 
         (used to compute loglikelihood)
     '''
-
+    data = data.T
     nNodes = data.shape[0] # for one person 
     # Number of timepoints in data
     nTRs = data.shape[1]
 
     # Z-score the data
-    #data_scaled = stats.zscore(data, axis=1)
+    data_scaled = stats.zscore(data, axis=1)
 
     # Estimate the empirical covariance
-    empCov = np.cov(data, rowvar=True)
+    empCov = np.cov(data_scaled, rowvar=True)
 
     # Run glasso
     glasso = glasso_problem(empCov, nTRs, 
