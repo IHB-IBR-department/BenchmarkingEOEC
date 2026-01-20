@@ -1,0 +1,23 @@
+# Tangent Leakage Experiment - Quick Test
+# ========================================
+# Use this for rapid testing and debugging.
+# Runs only 1 fold to verify the pipeline works.
+#
+# Usage:
+#   # Run from repo root:
+#   source venv/bin/activate && python -m benchmarking.tangent_leakage --config configs/tangent_leakage_quick.yaml
+
+# Data path (IHB time series, Schaefer200 atlas, Strategy-4 with GSR)
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/schafer200_time-series/ihb"
+
+# Cross-validation settings
+n_splits: 2  # Quick: only 2 folds (minimum for GroupKFold)
+
+# PCA settings (0.95 = keep 95% variance)
+pca_components: 0.95
+
+# Random seed for reproducibility
+random_state: 42
+
+# Output file (saves _folds.csv and _summary.csv)
+output: "results/tangent_leakage_quick.csv"

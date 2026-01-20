@@ -1,0 +1,72 @@
+# Honest Cross-Site Validation - Full Experiment
+# ==============================================
+# Runs all 384 pipeline combinations (192 per direction, bidirectional).
+#
+# This implements Scheme A: True cross-site generalization where
+# training and testing are performed on completely separate sites.
+#
+# Usage:
+#   # Run from repo root:
+#   source venv/bin/activate && python -m benchmarking.cross_site --config configs/cross_site_full.yaml
+
+# Data paths
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+
+# Datasets
+# Both sites specified = bidirectional experiments:
+# - china → ihb (train Beijing, test IHB)
+# - ihb → china (train IHB, test Beijing)
+train_on:
+  - china
+  - ihb
+test_on:
+  - china
+  - ihb
+
+# Pipeline parameters (all combinations tested)
+atlases:
+  - AAL
+  - Schaefer200
+  - Brainnetome
+  - HCPex
+
+fc_types:
+  - corr
+  - partial
+  - tangent
+  - glasso
+
+strategies: [1, 2, 3, 4, 5, 6]
+
+gsr_options:
+  - GSR
+  - noGSR
+
+# Model settings
+pca_components: 0.95  # Keep 95% variance
+random_state: 42
+
+# Classifier (extensible)
+# Options: `logreg`, `svm_rbf`
+model:
+  name: logreg
+  # To run SVM with RBF kernel:
+  # name: svm_rbf
+  # params: {C: 1.0, gamma: scale}
+  params:
+    solver: lbfgs
+    max_iter: 1000
+  scale: false  # auto-true for svm_rbf if omitted
+
+# Save per-sample test outputs (predictions + scores) for paired comparisons
+# (Exact McNemar, DeLong). Writes `*_test_outputs.csv`.
+save_test_outputs: false
+
+# Permutation testing (0 = skip, >0 = number of permutations)
+n_permutations: 1000  # Full: 1000 permutations for statistical validation
+
+# Multiprocessing
+n_workers: 8  # Number of parallel workers (adjust based on CPU cores)
+
+# Output
+output: "results/cross_site_full.csv"

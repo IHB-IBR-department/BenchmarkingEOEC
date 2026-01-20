@@ -1,0 +1,28 @@
+# Tangent Leakage Experiment - Full Test (5-fold CV)
+# ===================================================
+# Use this for the complete experiment to report in the paper.
+# Runs conventional 5-fold GroupKFold cross-validation.
+#
+# Usage:
+#   # Run from repo root:
+#   source venv/bin/activate && python -m benchmarking.tangent_leakage --config configs/tangent_leakage_full.yaml
+#
+# Expected runtime: ~10-15 minutes depending on hardware
+
+# Data path (IHB time series, Schaefer200 atlas, Strategy-4 with GSR)
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/schafer200_time-series/ihb"
+
+# Cross-validation settings
+# 5-fold GroupKFold (conventional): ~67 subjects train, ~17 subjects test per fold
+n_splits: 5
+
+# PCA settings
+# 0.95 = keep components explaining 95% of variance
+# This reduces dimensionality from ~19900 features to ~100-150 components
+pca_components: 0.95
+
+# Random seed for reproducibility
+random_state: 42
+
+# Output file for results (saves _folds.csv and _summary.csv)
+output: "results/tangent_leakage_full.csv"

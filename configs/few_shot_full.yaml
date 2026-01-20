@@ -1,0 +1,69 @@
+# Few-Shot Domain Adaptation - Full Experiment
+# =============================================
+# Runs all 192 pipeline combinations × 10 repeats = 1920 experiments.
+#
+# This implements Scheme B: Few-shot domain adaptation where
+# Beijing data + small IHB subset is used for training.
+#
+# Design:
+#   Training:  Beijing (92 scans) + 10 random IHB subjects (20 scans)
+#   Testing:   Remaining 74 IHB subjects (148 scans)
+#   Repeats:   10 random subsampling iterations
+#
+# CRITICAL: Splits are pre-generated ONCE and used for ALL pipelines
+# to ensure fair comparison.
+#
+# Usage:
+#   # Run from repo root:
+#   source venv/bin/activate && python -m benchmarking.few_shot --config configs/few_shot_full.yaml
+
+# Data paths
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+
+# Few-shot settings
+n_repeats: 10        # Number of random subsampling iterations
+n_few_shot: 10       # Number of IHB subjects for few-shot training
+
+# Pipeline parameters (all combinations tested)
+atlases:
+  - AAL
+  - Schaefer200
+  - Brainnetome
+  - HCPex
+
+fc_types:
+  - corr
+  - partial
+  - tangent
+  - glasso
+
+strategies: [1, 2, 3, 4, 5, 6]
+
+gsr_options:
+  - GSR
+  - noGSR
+
+# Model settings
+pca_components: 0.95  # Keep 95% variance
+random_state: 42
+
+# Classifier (extensible)
+# Options: `logreg`, `svm_rbf`
+model:
+  name: logreg
+  # To run SVM with RBF kernel:
+  # name: svm_rbf
+  # params: {C: 1.0, gamma: scale}
+  params:
+    solver: lbfgs
+    max_iter: 1000
+  scale: false  # auto-true for svm_rbf if omitted
+
+# Permutation testing (0 = skip, >0 = number of permutations)
+n_permutations: 1000  # Full: 1000 permutations for statistical validation
+
+# Multiprocessing
+n_workers: 8  # Number of parallel workers (adjust based on CPU cores)
+
+# Output
+output: "results/few_shot_full.csv"
