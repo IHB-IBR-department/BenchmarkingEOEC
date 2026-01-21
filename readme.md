@@ -67,6 +67,18 @@ Each dataset was processed through multiple denoising pipelines:
 | Brainnetome | 246 | 246 |
 | HCPex | 426 | 421-426 (varies slightly) |
 
+### AROMA data availability
+
+**Complete AROMA coverage for cross-site validation:**
+
+| Site | Subjects | Atlases with AROMA | Status |
+|------|----------|-------------------|--------|
+| IHB (St. Petersburg) | 84 | AAL, Brainnetome, HCPex, Schaefer200 | ✅ Complete |
+| China (Beijing) | 48 | AAL, Brainnetome, HCPex, Schaefer200 | ✅ Complete |
+
+Both datasets have complete ICA-AROMA preprocessing for all 4 atlases. Each atlas includes 8 AROMA files:
+- 2 AROMA variants (aggressive, non-aggressive) × 2 GSR options × 2 conditions (open/close)
+
 ## Aggregated time series format
 
 Time series are provided as numpy arrays (.npy) with consistent subject ordering.
@@ -74,19 +86,30 @@ Time series are provided as numpy arrays (.npy) with consistent subject ordering
 ### IHB data structure
 ```
 timeseries_ihb/
-└── Schaefer200/
-    ├── ihb_close_Schaefer200_strategy-1_noGSR.npy   # (84, 120, 200) float32
-    ├── ihb_open_Schaefer200_strategy-1_noGSR.npy    # (84, 120, 200) float32
-    ├── ihb_close_Schaefer200_strategy-1_GSR.npy
-    ├── ihb_open_Schaefer200_strategy-1_GSR.npy
-    ├── ... (strategies 2-6)
-    ├── ihb_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy
-    ├── ihb_close_Schaefer200_strategy-AROMA_nonaggr_noGSR.npy
-    ├── ... (AROMA with GSR)
-    └── subject_order.txt                            # sub-001, sub-002, ...
+├── Schaefer200/
+│   ├── ihb_close_Schaefer200_strategy-1_noGSR.npy   # (84, 120, 200) float32
+│   ├── ihb_open_Schaefer200_strategy-1_noGSR.npy    # (84, 120, 200) float32
+│   ├── ihb_close_Schaefer200_strategy-1_GSR.npy
+│   ├── ihb_open_Schaefer200_strategy-1_GSR.npy
+│   ├── ... (strategies 2-6)
+│   ├── ihb_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy    # (84, 120, 200)
+│   ├── ihb_open_Schaefer200_strategy-AROMA_aggr_noGSR.npy     # (84, 120, 200)
+│   ├── ihb_close_Schaefer200_strategy-AROMA_aggr_GSR.npy
+│   ├── ihb_open_Schaefer200_strategy-AROMA_aggr_GSR.npy
+│   ├── ihb_close_Schaefer200_strategy-AROMA_nonaggr_noGSR.npy
+│   ├── ihb_open_Schaefer200_strategy-AROMA_nonaggr_noGSR.npy
+│   ├── ihb_close_Schaefer200_strategy-AROMA_nonaggr_GSR.npy
+│   ├── ihb_open_Schaefer200_strategy-AROMA_nonaggr_GSR.npy
+│   └── subject_order.txt                            # sub-001 to sub-084 (same for all strategies)
+├── AAL/        # 84 subjects, 116 ROIs (complete AROMA)
+├── Brainnetome/  # 84 subjects, 246 ROIs (complete AROMA)
+└── HCPex/      # 84 subjects, 426 ROIs (complete AROMA)
 ```
 
-**Array dimensions**: `(n_subjects=84, n_timepoints=120, n_rois=200)`
+**Array dimensions**: `(n_subjects=84, n_timepoints=120, n_rois)`
+- Standard strategies: 6 strategies × 2 GSR options × 2 conditions = 24 files
+- AROMA strategies: 2 variants × 2 GSR options × 2 conditions = 8 files
+- Total: 32 files per atlas
 
 ### China data structure
 ```
@@ -94,11 +117,14 @@ timeseries_china/
 ├── Schaefer200/
 │   ├── china_close_Schaefer200_strategy-1_noGSR.npy  # (48, 240, 200, 2) float32
 │   ├── china_open_Schaefer200_strategy-1_noGSR.npy   # (48, 240, 200) float32
-│   ├── ... (strategies 1-6, AROMA variants, GSR options)
-│   └── subject_order_china.txt
-├── AAL/
-├── Brainnetome/
-└── HCPex/
+│   ├── ... (strategies 1-6)
+│   ├── china_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy    # (48, 240, 200, 2)
+│   ├── china_open_Schaefer200_strategy-AROMA_aggr_noGSR.npy     # (48, 240, 200)
+│   ├── ... (AROMA: aggr/nonaggr, GSR/noGSR)
+│   └── subject_order_china.txt                       # Same for all strategies
+├── AAL/        # 48 subjects, 116 ROIs (complete AROMA)
+├── Brainnetome/  # 48 subjects, 246 ROIs (complete AROMA)
+└── HCPex/      # 48 subjects, 426 ROIs (complete AROMA)
 ```
 
 **Array dimensions**:
@@ -106,6 +132,9 @@ timeseries_china/
   - `close[:,:,:,0]` = first closed session
   - `close[:,:,:,1]` = second closed session
 - **open**: `(n_subjects=48, n_timepoints=240, n_rois)` — 3D array
+- Standard strategies: 6 strategies × 2 GSR options × 2 conditions = 24 files per atlas
+- AROMA strategies: 2 variants × 2 GSR options × 2 conditions = 8 files per atlas
+- Total: 32 files per atlas
 
 ### Data quality notes
 
@@ -120,6 +149,28 @@ timeseries_china/
 - First closed session (`close[:,:,:,0]`) is complete
 - Open session is complete
 - Exclude this subject when using both closed sessions, or use only `close[:,:,:,0]`
+
+### Aggregation scripts
+
+To regenerate aggregated data from per-subject CSVs:
+
+**IHB (St. Petersburg) data:**
+```bash
+# Standard denoising pipelines (strategies 1-6)
+python -m benchmarking.aggregate_ihb
+
+# AROMA pipelines (all 4 atlases)
+python -m benchmarking.aggregate_ihb --aroma
+```
+
+**China (Beijing) data:**
+```bash
+# Standard denoising pipelines
+python -m benchmarking.aggregate_china
+
+# AROMA pipelines (all 4 atlases)
+python -m benchmarking.aggregate_china --aroma
+```
 
 ### Loading example
 
@@ -136,14 +187,59 @@ china_close = np.load('timeseries_china/Schaefer200/china_close_Schaefer200_stra
 china_open = np.load('timeseries_china/Schaefer200/china_open_Schaefer200_strategy-1_noGSR.npy')
 print(f"China: {china_close.shape}, {china_open.shape}")  # (48, 240, 200, 2), (48, 240, 200)
 
+# Load AROMA data
+ihb_close_aroma = np.load('timeseries_ihb/Schaefer200/ihb_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy')
+china_close_aroma = np.load('timeseries_china/Schaefer200/china_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy')
+
 # Access individual closed sessions for China
 china_close1 = china_close[:, :, :, 0]  # First EC session
 china_close2 = china_close[:, :, :, 1]  # Second EC session (caution: sub-3258811 is 78% zeros)
 
-# Load subject order
+# Load subject order (same for all strategies including AROMA)
 with open('timeseries_ihb/Schaefer200/subject_order.txt') as f:
     ihb_subjects = [line.strip() for line in f]
+with open('timeseries_china/Schaefer200/subject_order_china.txt') as f:
+    china_subjects = [line.strip() for line in f]
 ```
+
+### Data availability summary
+
+**IHB (St. Petersburg) - `timeseries_ihb/`**
+
+| Atlas | Files | Shape (close/open) | Size per file | ROIs |
+|-------|-------|-------------------|---------------|------|
+| AAL | 32 | (84, 120, 116) | 4.5 MB | 116 |
+| Brainnetome | 32 | (84, 120, 246) | 9.5 MB | 246 |
+| HCPex | 32 | (84, 120, 423) | 16 MB | 423 |
+| Schaefer200 | 32 | (84, 120, 200) | 7.7 MB | 200 |
+
+- **Total**: 128 numpy arrays across 4 atlases
+- **Subjects**: 84 (same for all atlases)
+- **Strategies per atlas**: 6 standard (1-6) + 2 AROMA (aggr, nonaggr) = 8 pipelines
+- **GSR options**: Each strategy available with GSR and noGSR
+- **Conditions**: Each pipeline has both eyes closed (close) and eyes open (open)
+- **Files per atlas**: 8 strategies × 2 GSR × 2 conditions = 32 files
+
+**China (Beijing) - `timeseries_china/`**
+
+| Atlas | Files | Shape (close) | Shape (open) | Size per file | ROIs |
+|-------|-------|---------------|--------------|---------------|------|
+| AAL | 32 | (48, 240, 116, 2) | (48, 240, 116) | 10 MB (close), 5 MB (open) | 116 |
+| Brainnetome | 32 | (48, 240, 246, 2) | (48, 240, 246) | 21 MB (close), 10.5 MB (open) | 246 |
+| HCPex | 32 | (48, 240, 426, 2) | (48, 240, 426) | 37 MB (close), 18.5 MB (open) | 426 |
+| Schaefer200 | 32 | (48, 240, 200, 2) | (48, 240, 200) | 17 MB (close), 8.5 MB (open) | 200 |
+
+- **Total**: 128 numpy arrays across 4 atlases
+- **Subjects**: 48 (same for all atlases)
+- **Strategies per atlas**: 6 standard (1-6) + 2 AROMA (aggr, nonaggr) = 8 pipelines
+- **GSR options**: Each strategy available with GSR and noGSR
+- **Conditions**: Each pipeline has 2 closed sessions (4D array) and 1 open session (3D array)
+- **Files per atlas**: 8 strategies × 2 GSR × 2 conditions = 32 files
+
+**Combined dataset totals:**
+- **256 numpy arrays** (128 IHB + 128 China)
+- **192 unique pipelines** per dataset (4 atlases × 6 strategies × 2 GSR × 4 FC types)
+- **Complete AROMA coverage** for both sites and all 4 atlases
 
 ### Computing functional connectivity
 

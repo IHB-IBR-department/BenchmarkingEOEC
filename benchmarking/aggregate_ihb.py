@@ -256,6 +256,9 @@ def aggregate_aroma(
 
         print(f"\nProcessing atlas: {atlas} (AROMA)")
 
+        # Track subjects with complete data for this atlas
+        atlas_valid_subjects = None
+
         for aroma_type in aroma_types:
             for gsr in gsr_options:
                 for run, condition in RUN_TO_CONDITION.items():
@@ -297,10 +300,20 @@ def aggregate_aroma(
                     np.save(atlas_dir / out_name, data)
                     print(f"    Saved {out_name}: {data.shape}")
 
-        # Save subject order
-        subject_order_file = atlas_dir / 'subject_order_aroma.txt'
-        with open(subject_order_file, 'w') as f:
-            f.write('\n'.join(subjects))
+                    # Update atlas valid subjects (use first pipeline's subjects as reference)
+                    if atlas_valid_subjects is None:
+                        atlas_valid_subjects = valid_subjects
+
+        # Save subject order with actual subjects that have data
+        # Note: AROMA uses the same subject order file as standard strategies
+        subject_order_file = atlas_dir / 'subject_order.txt'
+        if not subject_order_file.exists():
+            with open(subject_order_file, 'w') as f:
+                subjects_to_save = atlas_valid_subjects if atlas_valid_subjects else subjects
+                f.write('\n'.join(subjects_to_save))
+                print(f"  Saved subject_order.txt ({len(subjects_to_save)} subjects)")
+        else:
+            print(f"  Subject order file already exists")
 
 
 def main():
