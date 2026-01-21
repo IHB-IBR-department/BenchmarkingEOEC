@@ -12,6 +12,12 @@ Examples:
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
     --print-timing
 
+  # Precompute glasso for a single file
+  PYTHONPATH=. python -m benchmarking.precompute_glasso \
+    --input ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_ihb/Schaefer200/ihb_close_Schaefer200_strategy-1_GSR.npy \
+    --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
+    --print-timing
+
   # Use an explicit coverage source and threshold
   PYTHONPATH=. python -m benchmarking.precompute_glasso \
     --input-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_china \
@@ -36,9 +42,14 @@ def parse_args() -> argparse.Namespace:
         description="Precompute glasso FC matrices for all .npy time-series files in a folder.",
     )
     parser.add_argument(
+        "--input",
+        default=None,
+        help="File or folder with time-series .npy files.",
+    )
+    parser.add_argument(
         "--input-dir",
-        required=True,
-        help="Folder with time-series .npy files (searched recursively).",
+        default=None,
+        help="Deprecated alias for --input.",
     )
     parser.add_argument(
         "--output-dir",
@@ -94,9 +105,18 @@ def normalize_coverage_arg(value: str | None) -> str | None:
     return value
 
 
-def iter_timeseries_files(input_dir: Path, output_dir: Path) -> list[Path]:
+def iter_timeseries_files(input_path: Path, output_dir: Path) -> list[Path]:
+    if input_path.is_file():
+        if input_path.suffix != ".npy":
+            return []
+        if output_dir in input_path.parents:
+            return []
+        if input_path.stem.endswith("_glasso"):
+            return []
+        return [input_path]
+
     files = []
-    for path in sorted(input_dir.rglob("*.npy")):
+    for path in sorted(input_path.rglob("*.npy")):
         if output_dir in path.parents:
             continue
         if path.stem.endswith("_glasso"):
@@ -128,14 +148,23 @@ def compute_glasso(
 def main() -> int:
     args = parse_args()
 
-    input_dir = Path(args.input_dir).expanduser()
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input directory not found: {input_dir}")
+    if args.input and args.input_dir:
+        raise ValueError("Use only one of --input or --input-dir.")
+
+    input_value = args.input or args.input_dir
+    if not input_value:
+        raise ValueError("Missing --input (or --input-dir).")
+
+    input_path = Path(input_value).expanduser()
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input path not found: {input_path}")
+
+    input_root = input_path if input_path.is_dir() else input_path.parent
 
     output_dir = (
         Path(args.output_dir).expanduser()
         if args.output_dir
-        else input_dir.parent / "glasso_precomputed_fc"
+        else input_root.parent / "glasso_precomputed_fc"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -144,7 +173,7 @@ def main() -> int:
         if args.coverage_threshold <= 0 or args.coverage_threshold >= 1:
             raise ValueError("coverage_threshold must be in (0, 1)")
 
-    files = iter_timeseries_files(input_dir, output_dir)
+    files = iter_timeseries_files(input_path, output_dir)
     if not files:
         print("No .npy files found.")
         return 0
@@ -154,7 +183,7 @@ def main() -> int:
     failed = 0
 
     for path in files:
-        rel = path.relative_to(input_dir)
+        rel = path.relative_to(input_root)
         out_dir = output_dir / rel.parent
         out_path = out_dir / f"{path.stem}_glasso.npy"
 
