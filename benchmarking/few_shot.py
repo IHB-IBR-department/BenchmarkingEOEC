@@ -50,7 +50,7 @@ import yaml
 from tqdm import tqdm
 
 # Import data loading functions from cross_site module
-from benchmarking.cross_site import load_fc_data
+from benchmarking.cross_site import load_fc_data, load_bad_roi_mask, prepare_bad_roi_masks
 # Import classification with permutation testing from stats module
 from benchmarking.stats import run_classification_with_permutation
 
@@ -224,6 +224,15 @@ def process_pipeline(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     results = []
 
     try:
+        bad_roi_mask = None
+        if config.get("coverage_mask_enabled"):
+            bad_roi_mask = load_bad_roi_mask(
+                config["atlas"],
+                data_path=config.get("data_path"),
+                threshold=config.get("coverage_mask_threshold", 0.1),
+                mask_dir=config.get("coverage_mask_dir"),
+            )
+
         # Load Beijing data (training base)
         beijing_X, beijing_y = load_fc_data(
             site='china',
@@ -231,7 +240,8 @@ def process_pipeline(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             atlas=config['atlas'],
             strategy=config['strategy'],
             gsr=config['gsr'],
-            data_path=config.get('data_path')
+            data_path=config.get('data_path'),
+            bad_roi_mask=bad_roi_mask,
         )
 
         # Load IHB data (few-shot + test)
@@ -241,7 +251,8 @@ def process_pipeline(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             atlas=config['atlas'],
             strategy=config['strategy'],
             gsr=config['gsr'],
-            data_path=config.get('data_path')
+            data_path=config.get('data_path'),
+            bad_roi_mask=bad_roi_mask,
         )
 
         # Run on each split
@@ -300,6 +311,10 @@ def generate_pipeline_configs(
         List of pipeline config dicts
     """
     pipeline_configs = []
+    coverage_cfg = config.get("coverage_mask") or {}
+    coverage_enabled = bool(coverage_cfg.get("enabled", False))
+    coverage_threshold = float(coverage_cfg.get("threshold", 0.1))
+    coverage_mask_dir = coverage_cfg.get("mask_dir")
 
     for atlas, fc_type, strategy, gsr in product(
         config['atlases'],
@@ -320,6 +335,9 @@ def generate_pipeline_configs(
             'model_params': (config.get('model') or {}).get('params') if isinstance(config.get('model'), dict) else config.get('model_params'),
             'scale': (config.get('model') or {}).get('scale') if isinstance(config.get('model'), dict) else config.get('scale'),
             'return_probabilities': config.get('return_probabilities', False),
+            'coverage_mask_enabled': coverage_enabled,
+            'coverage_mask_threshold': coverage_threshold,
+            'coverage_mask_dir': coverage_mask_dir,
             'splits': splits  # Same splits for all pipelines!
         })
 
@@ -350,6 +368,7 @@ def run_all_pipelines(
     pd.DataFrame
         Results for all pipelines × all splits
     """
+    prepare_bad_roi_masks(config)
     pipeline_configs = generate_pipeline_configs(config, splits)
     n_workers = n_workers or config.get('n_workers', 1)
     n_repeats = len(splits)

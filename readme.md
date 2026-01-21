@@ -5,8 +5,158 @@ Medvedeva, T., Knyazeva, I., Masharipov, R., Korotkov, A., Cherednichenko, D., &
 Benchmarking resting state fMRI connectivity pipelines for classification: Robust accuracy despite processing variability in cross-site eye state prediction. Neuroscience.
 https://doi.org/10.1101/2025.10.20.683049
 
-Preprocessed data for Beijing EO/EC is available here:
-https://drive.google.com/file/d/1N1wdbF0tsrAzL9GSgUK_y4xBNDiPLH5X/view?usp=sharing
+## Data availability
+
+Preprocessed time series data are available for download:
+- **Beijing (China) EOEC dataset**: [Google Drive link](https://drive.google.com/file/d/1N1wdbF0tsrAzL9GSgUK_y4xBNDiPLH5X/view?usp=sharing)
+- **IHB (St. Petersburg) dataset**: [link TBD]
+
+## Dataset description
+
+This study uses two resting-state fMRI datasets with Eyes Open (EO) and Eyes Closed (EC) conditions:
+
+### IHB dataset (St. Petersburg, Russia)
+| Property | Value |
+|----------|-------|
+| Scanner | Philips 3T |
+| Subjects | 84 |
+| Conditions | 1 EC (run-1) + 1 EO (run-2) per subject |
+| Timepoints | 120 TRs per run |
+| TR | 2.5s |
+
+### Beijing EOEC dataset (China)
+| Property | Value |
+|----------|-------|
+| Scanner | Siemens 3T |
+| Subjects | 48 |
+| Conditions | 2 EC + 1 EO per subject (3 runs total) |
+| Timepoints | 240 TRs per run |
+| TR | 2.0s |
+| Session mapping | Variable per subject (see BeijingEOEC.csv) |
+
+### Preprocessing pipelines
+
+Each dataset was processed through multiple denoising pipelines:
+
+**Standard denoising strategies (1-6):**
+| Strategy | Confounds |
+|----------|-----------|
+| 1 | 24 motion parameters (24P) |
+| 2 | aCompCor (5 components) + 12P |
+| 3 | aCompCor (50% variance) + 12P |
+| 4 | aCompCor (5 components) + 24P |
+| 5 | aCompCor (50% variance) + 24P |
+| 6 | a/tCompCor (50% variance each) + 24P |
+
+**ICA-AROMA variants:**
+| Variant | Description |
+|---------|-------------|
+| AROMA_aggr | Aggressive denoising (full regression of noise ICs) |
+| AROMA_nonaggr | Non-aggressive denoising (partial regression) |
+
+**Global Signal Regression (GSR):**
+- Each strategy available with and without GSR
+- Total: (6 standard + 2 AROMA) × 2 GSR = 16 pipelines per atlas
+
+### Atlases
+
+| Atlas | Nominal ROIs | After coverage filtering |
+|-------|--------------|-------------------------|
+| Schaefer200 | 200 | 200 (China), 200 (IHB) |
+| AAL | 116 | 116 |
+| Brainnetome | 246 | 246 |
+| HCPex | 426 | 421-426 (varies slightly) |
+
+## Aggregated time series format
+
+Time series are provided as numpy arrays (.npy) with consistent subject ordering.
+
+### IHB data structure
+```
+timeseries_ihb/
+└── Schaefer200/
+    ├── ihb_close_Schaefer200_strategy-1_noGSR.npy   # (84, 120, 200) float32
+    ├── ihb_open_Schaefer200_strategy-1_noGSR.npy    # (84, 120, 200) float32
+    ├── ihb_close_Schaefer200_strategy-1_GSR.npy
+    ├── ihb_open_Schaefer200_strategy-1_GSR.npy
+    ├── ... (strategies 2-6)
+    ├── ihb_close_Schaefer200_strategy-AROMA_aggr_noGSR.npy
+    ├── ihb_close_Schaefer200_strategy-AROMA_nonaggr_noGSR.npy
+    ├── ... (AROMA with GSR)
+    └── subject_order.txt                            # sub-001, sub-002, ...
+```
+
+**Array dimensions**: `(n_subjects=84, n_timepoints=120, n_rois=200)`
+
+### China data structure
+```
+timeseries_china/
+├── Schaefer200/
+│   ├── china_close_Schaefer200_strategy-1_noGSR.npy  # (48, 240, 200, 2) float32
+│   ├── china_open_Schaefer200_strategy-1_noGSR.npy   # (48, 240, 200) float32
+│   ├── ... (strategies 1-6, AROMA variants, GSR options)
+│   └── subject_order_china.txt
+├── AAL/
+├── Brainnetome/
+└── HCPex/
+```
+
+**Array dimensions**:
+- **close**: `(n_subjects=48, n_timepoints=240, n_rois, 2)` — 4D array
+  - `close[:,:,:,0]` = first closed session
+  - `close[:,:,:,1]` = second closed session
+- **open**: `(n_subjects=48, n_timepoints=240, n_rois)` — 3D array
+
+### Data quality notes
+
+**Incomplete scans (zero-padded)**:
+
+| Subject | Run | Condition | Actual TRs | Zeros | Impact |
+|---------|-----|-----------|------------|-------|--------|
+| sub-2021733 | run-2 | open | 239/240 | 0.4% | Minimal |
+| **sub-3258811** | run-3 | close2 | 53/240 | **77.9%** | **Significant** |
+
+**WARNING**: sub-3258811's second closed session (`close[:,:,:,1]`) contains 77.9% zeros.
+- First closed session (`close[:,:,:,0]`) is complete
+- Open session is complete
+- Exclude this subject when using both closed sessions, or use only `close[:,:,:,0]`
+
+### Loading example
+
+```python
+import numpy as np
+
+# Load IHB data
+ihb_close = np.load('timeseries_ihb/Schaefer200/ihb_close_Schaefer200_strategy-1_noGSR.npy')
+ihb_open = np.load('timeseries_ihb/Schaefer200/ihb_open_Schaefer200_strategy-1_noGSR.npy')
+print(f"IHB: {ihb_close.shape}, {ihb_open.shape}")  # (84, 120, 200), (84, 120, 200)
+
+# Load China data
+china_close = np.load('timeseries_china/Schaefer200/china_close_Schaefer200_strategy-1_noGSR.npy')
+china_open = np.load('timeseries_china/Schaefer200/china_open_Schaefer200_strategy-1_noGSR.npy')
+print(f"China: {china_close.shape}, {china_open.shape}")  # (48, 240, 200, 2), (48, 240, 200)
+
+# Access individual closed sessions for China
+china_close1 = china_close[:, :, :, 0]  # First EC session
+china_close2 = china_close[:, :, :, 1]  # Second EC session (caution: sub-3258811 is 78% zeros)
+
+# Load subject order
+with open('timeseries_ihb/Schaefer200/subject_order.txt') as f:
+    ihb_subjects = [line.strip() for line in f]
+```
+
+### Computing functional connectivity
+
+```python
+from benchmarking.fc import ConnectomeTransformer
+
+# Leakage-safe FC computation (important for tangent space)
+transformer = ConnectomeTransformer(kind='corr', vectorize=True)
+
+# Fit on training data, transform both
+X_train = transformer.fit_transform(train_timeseries)
+X_test = transformer.transform(test_timeseries)
+```
 
 ## Classification pipeline (cross_site and few_shot)
 
@@ -93,8 +243,8 @@ randomization (sign-flip) tests with matched pipelines. This aggregates per-samp
 losses to subject-level means before testing.
 
 Required inputs for paired comparisons:
-- `results/*_test_outputs.csv` (from cross-site with `save_test_outputs: true`)
-- `results/*_pipeline_abbreviations.csv` (maps P0001.. to full pipeline specs)
+- `results/cross_site/<train>2<test>/*_test_outputs.csv` (from cross-site with `save_test_outputs: true`)
+- `results/cross_site/<train>2<test>/*_pipeline_abbreviations.csv` (maps P0001.. to full pipeline specs)
 
 Helper scripts:
 - `benchmarking/pipeline_comparisons.py` (CLI for factor and A vs B tests)
@@ -121,16 +271,62 @@ Outputs:
 ## Outputs overview
 
 Cross-site:
-- `results/*_results.csv` per pipeline results
-- `results/*_summary_*.csv` aggregated summaries
-- `results/*_test_outputs.csv` per-sample outputs (if enabled)
-- `results/*_pipeline_abbreviations.csv` mapping of pipeline abbrev to spec
-- `results/pipeline_predictions_<train>_to_<test>.csv` wide prediction matrices
+- `results/cross_site/<train>2<test>/*_results.csv` per pipeline results
+- `results/cross_site/<train>2<test>/*_summary_*.csv` aggregated summaries
+- `results/cross_site/<train>2<test>/*_test_outputs.csv` per-sample outputs (if enabled)
+- `results/cross_site/<train>2<test>/*_pipeline_abbreviations.csv` mapping of pipeline abbrev to spec
+- `results/cross_site/<train>2<test>/pipeline_predictions.csv` wide prediction matrix
 
 Few-shot:
 - `results/*_results.csv` per pipeline per repeat
 - `results/*_summary_*.csv` aggregated summaries
 - `results/*_splits.yaml` saved subject splits
+
+## Coverage-based ROI masking (optional)
+
+This option masks FC edges that touch ROIs with poor coverage in either site.
+A ROI is marked \"bad\" if its parcel coverage is below the threshold in
+**IHB or China**. The mask is applied by zeroing rows/cols for bad ROIs in
+each FC matrix before vectorization.
+
+### Option A: compute masks automatically (per run)
+Set in YAML:
+```
+coverage_mask:
+  enabled: true
+  threshold: 0.1
+  mask_dir: null
+```
+When `mask_dir` is null, masks are computed once per atlas from
+`<data_root>/coverage/*_parcel_coverage.npy` and saved to:
+`<output_dir>/coverage_masks/<atlas>_bad_parcels.npy`.
+
+### Option B: use precomputed masks
+Generate masks once:
+```
+PYTHONPATH=. python -m benchmarking.coverage_bad_rois --threshold 0.1 --output-dir benchmarking
+```
+Then point YAML to that folder:
+```
+coverage_mask:
+  enabled: true
+  threshold: 0.1
+  mask_dir: "benchmarking"
+```
+Coverage overlap summary (threshold 0.1, from `coverage_bad_rois`):
+
+| Atlas | IHB good | China good | Both good | Bad (either) |
+|-------|----------|------------|-----------|--------------|
+| AAL | 106 (91.38%) | 116 (100.00%) | 106 (91.38%) | 10 (8.62%) |
+| Schaefer200 | 182 (91.00%) | 200 (100.00%) | 182 (91.00%) | 18 (9.00%) |
+| Brainnetome | 220 (89.43%) | 246 (100.00%) | 220 (89.43%) | 26 (10.57%) |
+| HCPex | 379 (88.97%) | 426 (100.00%) | 379 (88.97%) | 47 (11.03%) |
+
+Default coverage for pipeline/ML comparisons: use **IHB** coverage masks unless explicitly overridden.
+
+Notes:
+- `threshold` must be in (0, 1).
+- The same `coverage_mask` block is supported in both cross-site and few-shot configs.
 
 ## Quick usage (examples)
 
@@ -145,6 +341,9 @@ Permutation demo (correlation only, small test):
 
 Pipeline comparisons (after running a cross-site config with `save_test_outputs: true`):
 - Factor-level test (GSR vs noGSR):
-  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons factor --test-outputs results/cross_site_quick_classification_test_outputs.csv --factor gsr --level-a GSR --level-b noGSR`
+  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons factor --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --factor gsr --level-a GSR --level-b noGSR`
+- Factor-level test (FC type: tangent vs corr):
+  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons factor --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --factor fc_type --level-a tangent --level-b corr`
 - Pipeline A vs B (by abbreviation):
-  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons compare --test-outputs results/cross_site_quick_classification_test_outputs.csv --abbrev results/cross_site_quick_classification_pipeline_abbreviations.csv --pipeline-a P0001 --pipeline-b P0003`
+  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons compare --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --abbrev results/cross_site/ihb2china/cross_site_quick_classification_pipeline_abbreviations.csv --pipeline-a P0001 --pipeline-b P0003`
+Use `results/cross_site/china2ihb/...` for the opposite direction.

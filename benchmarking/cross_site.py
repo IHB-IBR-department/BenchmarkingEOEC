@@ -238,7 +238,8 @@ def load_fc_data(
     atlas: str,
     strategy: int,
     gsr: str,
-    data_path: str
+    data_path: str,
+    bad_roi_mask: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load FC matrices for a single pipeline configuration.
@@ -268,9 +269,117 @@ def load_fc_data(
         Labels, shape (n_samples,) - 0=EC, 1=EO
     """
     if fc_type == 'glasso':
-        return load_fc_glasso(site, atlas, strategy, gsr, data_path)
+        X, y = load_fc_glasso(site, atlas, strategy, gsr, data_path)
     else:
-        return load_fc_standard(site, fc_type, atlas, strategy, gsr, data_path)
+        X, y = load_fc_standard(site, fc_type, atlas, strategy, gsr, data_path)
+
+    if bad_roi_mask is not None:
+        X = apply_bad_roi_mask(X, bad_roi_mask)
+
+    return X, y
+
+
+# =============================================================================
+# Coverage-based ROI masking
+# =============================================================================
+
+_BAD_ROI_MASK_CACHE: Dict[tuple, np.ndarray] = {}
+
+
+def apply_bad_roi_mask(X: np.ndarray, bad_roi_mask: np.ndarray) -> np.ndarray:
+    """
+    Zero out FC edges that touch a bad ROI (rows/cols for bad ROIs).
+    """
+    bad_roi_mask = np.asarray(bad_roi_mask, dtype=bool).reshape(-1)
+    if X.shape[1] != bad_roi_mask.shape[0]:
+        raise ValueError(f"Bad ROI mask length {bad_roi_mask.shape[0]} does not match FC size {X.shape[1]}")
+    if not bad_roi_mask.any():
+        return X
+    X = np.asarray(X)
+    X[:, bad_roi_mask, :] = 0.0
+    X[:, :, bad_roi_mask] = 0.0
+    return X
+
+
+def load_bad_roi_mask(
+    atlas: str,
+    *,
+    data_path: Optional[str],
+    threshold: float,
+    mask_dir: Optional[str] = None,
+) -> np.ndarray:
+    """
+    Load or compute bad-ROI mask for an atlas.
+
+    If mask_dir is provided, loads `<atlas>_bad_parcels.npy` from that folder.
+    Otherwise computes from coverage arrays in `<data_root>/coverage`.
+    """
+    if threshold <= 0 or threshold >= 1:
+        raise ValueError("coverage threshold must be in (0, 1)")
+    cache_key = (atlas, float(threshold), str(mask_dir), str(data_path))
+    cached = _BAD_ROI_MASK_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if mask_dir:
+        mask_path = Path(mask_dir) / f"{atlas}_bad_parcels.npy"
+        if not mask_path.exists():
+            raise FileNotFoundError(f"Bad ROI mask not found: {mask_path}")
+        mask = np.load(mask_path).astype(bool)
+        _BAD_ROI_MASK_CACHE[cache_key] = mask
+        return mask
+
+    data_root = resolve_data_root(data_path)
+    coverage_dir = Path(data_root) / "coverage"
+    china_path = coverage_dir / f"china_{atlas}_parcel_coverage.npy"
+    ihb_path = coverage_dir / f"ihb_{atlas}_parcel_coverage.npy"
+    if not china_path.exists() or not ihb_path.exists():
+        raise FileNotFoundError(f"Missing coverage files for atlas {atlas} in {coverage_dir}")
+
+    china = np.load(china_path).astype(float)
+    ihb = np.load(ihb_path).astype(float)
+    if china.shape != ihb.shape:
+        raise ValueError(f"Coverage shape mismatch for atlas {atlas}: {china.shape} vs {ihb.shape}")
+
+    mask = (china < threshold) | (ihb < threshold)
+    _BAD_ROI_MASK_CACHE[cache_key] = mask
+    return mask
+
+
+def prepare_bad_roi_masks(config: Dict[str, Any]) -> None:
+    """
+    Precompute bad-ROI masks per atlas and store them in a folder.
+
+    This updates config['coverage_mask']['mask_dir'] when enabled and no
+    mask_dir is provided, to avoid recomputing per pipeline.
+    """
+    coverage_cfg = config.get("coverage_mask") or {}
+    if not coverage_cfg.get("enabled", False):
+        return
+
+    mask_dir = coverage_cfg.get("mask_dir")
+    if mask_dir:
+        return
+
+    threshold = float(coverage_cfg.get("threshold", 0.1))
+    if threshold <= 0 or threshold >= 1:
+        raise ValueError("coverage threshold must be in (0, 1)")
+    output_path = Path(config["output"])
+    mask_dir_path = output_path.parent / "coverage_masks"
+    mask_dir_path.mkdir(parents=True, exist_ok=True)
+
+    for atlas in config.get("atlases", []):
+        mask = load_bad_roi_mask(
+            atlas,
+            data_path=config.get("data_path"),
+            threshold=threshold,
+            mask_dir=None,
+        )
+        np.save(mask_dir_path / f"{atlas}_bad_parcels.npy", mask.astype(bool))
+
+    coverage_cfg["mask_dir"] = str(mask_dir_path)
+    coverage_cfg["threshold"] = threshold
+    config["coverage_mask"] = coverage_cfg
 
 
 # =============================================================================
@@ -313,6 +422,8 @@ def process_pipeline(config: Dict[str, Any]) -> Dict[str, Any]:
         'fc_type': config['fc_type'],
         'strategy': config['strategy'],
         'gsr': config['gsr'],
+        'model': config.get('model'),
+        'model_params': config.get('model_params'),
         'n_train': None,
         'n_test': None,
         'train_acc': None,
@@ -330,6 +441,15 @@ def process_pipeline(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     try:
+        bad_roi_mask = None
+        if config.get("coverage_mask_enabled"):
+            bad_roi_mask = load_bad_roi_mask(
+                config["atlas"],
+                data_path=config.get("data_path"),
+                threshold=config.get("coverage_mask_threshold", 0.1),
+                mask_dir=config.get("coverage_mask_dir"),
+            )
+
         # Load training data
         X_train, y_train = load_fc_data(
             site=config['train_site'],
@@ -337,7 +457,8 @@ def process_pipeline(config: Dict[str, Any]) -> Dict[str, Any]:
             atlas=config['atlas'],
             strategy=config['strategy'],
             gsr=config['gsr'],
-            data_path=config['data_path']
+            data_path=config['data_path'],
+            bad_roi_mask=bad_roi_mask,
         )
 
         # Load test data
@@ -347,7 +468,8 @@ def process_pipeline(config: Dict[str, Any]) -> Dict[str, Any]:
             atlas=config['atlas'],
             strategy=config['strategy'],
             gsr=config['gsr'],
-            data_path=config['data_path']
+            data_path=config['data_path'],
+            bad_roi_mask=bad_roi_mask,
         )
 
         result['n_train'] = len(y_train)
@@ -403,6 +525,10 @@ def generate_pipeline_configs(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     test_sites = config['test_on'] if isinstance(config['test_on'], list) else [config['test_on']]
 
     pipeline_configs = []
+    coverage_cfg = config.get("coverage_mask") or {}
+    coverage_enabled = bool(coverage_cfg.get("enabled", False))
+    coverage_threshold = float(coverage_cfg.get("threshold", 0.1))
+    coverage_mask_dir = coverage_cfg.get("mask_dir")
 
     for train_site, test_site, atlas, fc_type, strategy, gsr in product(
         train_sites,
@@ -431,6 +557,9 @@ def generate_pipeline_configs(config: Dict[str, Any]) -> List[Dict[str, Any]]:
             'model_params': (config.get('model') or {}).get('params') if isinstance(config.get('model'), dict) else config.get('model_params'),
             'scale': (config.get('model') or {}).get('scale') if isinstance(config.get('model'), dict) else config.get('scale'),
             'save_test_outputs': bool(config.get('save_test_outputs', False) or config.get('return_probabilities', False)),
+            'coverage_mask_enabled': coverage_enabled,
+            'coverage_mask_threshold': coverage_threshold,
+            'coverage_mask_dir': coverage_mask_dir,
         })
 
     return pipeline_configs
@@ -455,6 +584,7 @@ def run_all_pipelines(
     pd.DataFrame
         Results for all pipelines
     """
+    prepare_bad_roi_masks(config)
     pipeline_configs = generate_pipeline_configs(config)
     n_workers = n_workers or config.get('n_workers', 1)
 
@@ -504,16 +634,6 @@ def compute_summary(df: pd.DataFrame) -> pd.DataFrame:
     # Add direction column
     df_valid['direction'] = df_valid['train_site'] + ' → ' + df_valid['test_site']
 
-    # Overall summary by direction
-    direction_summary = df_valid.groupby('direction').agg({
-        'test_acc': ['mean', 'std', 'min', 'max', 'count'],
-        'train_acc': ['mean', 'std'],
-        'test_auc': ['mean', 'std'],
-        'test_brier': ['mean', 'std'],
-    }).round(4)
-    direction_summary.columns = ['_'.join(col).strip() for col in direction_summary.columns.values]
-    direction_summary = direction_summary.reset_index()
-
     # Summary by FC type
     fc_summary = df_valid.groupby(['direction', 'fc_type']).agg({
         'test_acc': ['mean', 'std'],
@@ -554,7 +674,6 @@ def compute_summary(df: pd.DataFrame) -> pd.DataFrame:
     gsr_summary = gsr_summary.reset_index()
 
     return {
-        'by_direction': direction_summary,
         'by_fc_type': fc_summary,
         'by_atlas': atlas_summary,
         'by_gsr': gsr_summary
@@ -671,18 +790,25 @@ def build_test_outputs_df(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def normalize_model_params(value: Any) -> Any:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return json.dumps({})
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    return value
+
+
 def build_pipeline_abbrev_map(df_test_outputs: pd.DataFrame) -> pd.DataFrame:
     """
     Create a stable pipeline abbreviation (column name) for each unique pipeline spec.
 
     Abbreviations are short IDs (P0001, P0002, ...) to keep wide CSVs manageable.
+    Direction is intentionally excluded so the same pipeline maps to the same abbrev.
     """
     if df_test_outputs.empty:
         return pd.DataFrame()
 
     key_cols = [
-        "train_site",
-        "test_site",
         "atlas",
         "fc_type",
         "strategy",
@@ -698,12 +824,9 @@ def build_pipeline_abbrev_map(df_test_outputs: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
-    pipelines["direction"] = pipelines["train_site"] + " → " + pipelines["test_site"]
     pipelines["abbrev"] = [f"P{i + 1:04d}" for i in range(len(pipelines))]
     pipelines["spec"] = (
-        "train=" + pipelines["train_site"].astype(str)
-        + ", test=" + pipelines["test_site"].astype(str)
-        + ", atlas=" + pipelines["atlas"].astype(str)
+        "atlas=" + pipelines["atlas"].astype(str)
         + ", fc_type=" + pipelines["fc_type"].astype(str)
         + ", strategy=" + pipelines["strategy"].astype(str)
         + ", gsr=" + pipelines["gsr"].astype(str)
@@ -711,7 +834,7 @@ def build_pipeline_abbrev_map(df_test_outputs: pd.DataFrame) -> pd.DataFrame:
         + ", model_params=" + pipelines["model_params"].astype(str)
     )
 
-    return pipelines[["abbrev", "direction", *key_cols, "spec"]]
+    return pipelines[["abbrev", *key_cols, "spec"]]
 
 
 def save_pipeline_predictions(
@@ -730,8 +853,6 @@ def save_pipeline_predictions(
         return
 
     key_cols = [
-        "train_site",
-        "test_site",
         "atlas",
         "fc_type",
         "strategy",
@@ -748,7 +869,12 @@ def save_pipeline_predictions(
     output_dir = output_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for (train_site, test_site), df_dir in df_m.groupby(["train_site", "test_site"], sort=True):
+    if df_m["train_site"].nunique() == 1 and df_m["test_site"].nunique() == 1:
+        grouped = [((df_m["train_site"].iloc[0], df_m["test_site"].iloc[0]), df_m)]
+    else:
+        grouped = df_m.groupby(["train_site", "test_site"], sort=True)
+
+    for (train_site, test_site), df_dir in grouped:
         wide = (
             df_dir.pivot_table(
                 index=["test_subject", "y_true"],
@@ -770,9 +896,16 @@ def save_pipeline_predictions(
         for c in pipeline_cols:
             wide[c] = wide[c].astype("Int64")
 
-        preds_file = output_dir / f"pipeline_predictions_{train_site}_to_{test_site}.csv"
+        if df_m["train_site"].nunique() == 1 and df_m["test_site"].nunique() == 1:
+            preds_file = output_dir / "pipeline_predictions.csv"
+        else:
+            preds_file = output_dir / f"pipeline_predictions_{train_site}_to_{test_site}.csv"
         wide.to_csv(preds_file, index=False)
         print(f"Pipeline predictions saved to: {preds_file}")
+
+
+def direction_slug(train_site: str, test_site: str) -> str:
+    return f"{train_site}2{test_site}"
 
 
 # =============================================================================
@@ -834,40 +967,62 @@ def main():
         print(f"\nWarning: {n_errors} pipelines failed!")
         print(df[df['error'].notna()][['train_site', 'test_site', 'atlas', 'fc_type', 'strategy', 'gsr', 'error']])
 
-    # Optionally save per-sample test outputs for paired comparisons (McNemar, DeLong)
-    if config.get("save_test_outputs", False) or config.get("return_probabilities", False):
-        df_test_outputs = build_test_outputs_df(df)
-        test_outputs_file = str(Path(config["output"])).replace(".csv", "_test_outputs.csv")
-        Path(test_outputs_file).parent.mkdir(parents=True, exist_ok=True)
-        df_test_outputs.to_csv(test_outputs_file, index=False)
-        print(f"Test outputs saved to: {test_outputs_file}")
-
-        pipeline_map = build_pipeline_abbrev_map(df_test_outputs)
-        if not pipeline_map.empty:
-            pipeline_map_file = str(Path(config["output"])).replace(".csv", "_pipeline_abbreviations.csv")
-            pipeline_map.to_csv(pipeline_map_file, index=False)
-            print(f"Pipeline abbreviations saved to: {pipeline_map_file}")
-            save_pipeline_predictions(df_test_outputs, pipeline_map, config["output"])
-
     # Drop per-sample columns from the main results CSV
     df_results = df.drop(columns=["test_y_pred", "test_score", "test_p_positive"], errors="ignore")
+    if "model_params" in df_results.columns:
+        df_results["model_params"] = df_results["model_params"].apply(normalize_model_params)
 
-    # Compute and save results
-    summaries = compute_summary(df_results)
-    save_results(df_results, config['output'], summaries)
+    output_base = Path(config["output"]).expanduser()
+    if output_base.parent.name == "cross_site":
+        output_root = output_base.parent
+    else:
+        output_root = output_base.parent / "cross_site"
+
+    # Optionally build per-sample test outputs for paired comparisons (McNemar, DeLong)
+    df_test_outputs = None
+    if config.get("save_test_outputs", False) or config.get("return_probabilities", False):
+        df_test_outputs = build_test_outputs_df(df)
+
+    for (train_site, test_site), df_dir in df_results.groupby(["train_site", "test_site"], sort=True):
+        direction_dir = output_root / direction_slug(train_site, test_site)
+        direction_dir.mkdir(parents=True, exist_ok=True)
+        output_path = direction_dir / output_base.name
+
+        df_dir_out = df_dir.copy()
+        pipeline_map = None
+
+        if df_test_outputs is not None:
+            df_test_dir = df_test_outputs[
+                (df_test_outputs["train_site"] == train_site)
+                & (df_test_outputs["test_site"] == test_site)
+            ]
+            test_outputs_file = str(output_path).replace(".csv", "_test_outputs.csv")
+            df_test_dir.to_csv(test_outputs_file, index=False)
+            print(f"Test outputs saved to: {test_outputs_file}")
+
+            pipeline_map = build_pipeline_abbrev_map(df_test_dir)
+            if not pipeline_map.empty:
+                pipeline_map_file = str(output_path).replace(".csv", "_pipeline_abbreviations.csv")
+                pipeline_map.to_csv(pipeline_map_file, index=False)
+                print(f"Pipeline abbreviations saved to: {pipeline_map_file}")
+                key_cols = ["atlas", "fc_type", "strategy", "gsr", "model", "model_params"]
+                df_dir_out = df_dir_out.merge(
+                    pipeline_map[["abbrev", *key_cols]],
+                    on=key_cols,
+                    how="left",
+                ).rename(columns={"abbrev": "pipeline_id"})
+                save_pipeline_predictions(df_test_dir, pipeline_map, str(output_path))
+
+        summaries = compute_summary(df_dir_out)
+        save_results(df_dir_out, str(output_path), summaries)
 
     # Print summary
     print("\n" + "=" * 60)
-    print("SUMMARY BY DIRECTION")
-    print("=" * 60)
-    if 'by_direction' in summaries and not summaries['by_direction'].empty:
-        print(summaries['by_direction'].to_string(index=False))
-
-    print("\n" + "=" * 60)
     print("SUMMARY BY FC TYPE")
     print("=" * 60)
-    if 'by_fc_type' in summaries and not summaries['by_fc_type'].empty:
-        print(summaries['by_fc_type'].to_string(index=False))
+    summaries_all = compute_summary(df_results)
+    if 'by_fc_type' in summaries_all and not summaries_all['by_fc_type'].empty:
+        print(summaries_all['by_fc_type'].to_string(index=False))
 
 
 if __name__ == '__main__':

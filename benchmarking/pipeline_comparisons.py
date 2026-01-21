@@ -17,14 +17,14 @@ Examples
 --------
 # Factor-level test (GSR vs noGSR) for one direction
 python benchmarking/pipeline_comparisons.py factor \
-  --test-outputs results/cross_site_full_test_outputs.csv \
+  --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv \
   --factor gsr --level-a GSR --level-b noGSR \
   --train-site ihb --test-site china
 
 # Pipeline A vs B (by abbrev)
 python benchmarking/pipeline_comparisons.py compare \
-  --test-outputs results/cross_site_full_test_outputs.csv \
-  --abbrev results/cross_site_full_pipeline_abbreviations.csv \
+  --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv \
+  --abbrev results/cross_site/ihb2china/cross_site_quick_classification_pipeline_abbreviations.csv \
   --pipeline-a P0001 --pipeline-b P0002
 """
 
@@ -151,8 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     factor.add_argument("--metric", default="log_loss", help="Metric: log_loss, brier, acc")
     factor.add_argument("--train-site", default=None, help="Train site (optional)")
     factor.add_argument("--test-site", default=None, help="Test site (optional)")
-    factor.add_argument("--n-permutations", type=int, default=100)
-    factor.add_argument("--n-bootstrap", type=int, default=100)
+    factor.add_argument("--n-permutations", type=int, default=1000)
+    factor.add_argument("--n-bootstrap", type=int, default=1000)
     factor.add_argument("--random-state", type=int, default=42)
     factor.add_argument("--alternative", choices=["two-sided", "greater", "less"], default="two-sided")
     factor.add_argument("--output", default=None, help="Optional output JSON path")
