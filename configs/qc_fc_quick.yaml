@@ -7,7 +7,7 @@ data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
 
 # Sites to analyze
 sites:
-  - ihb
+  - china
 
 # Pipeline parameters (subset for quick testing)
 atlases:
@@ -16,11 +16,13 @@ atlases:
 # Strategies: 1-6 are standard denoising, AROMA_aggr/AROMA_nonaggr are ICA-AROMA
 strategies:
   - 1
+  - AROMA_aggr
 
 gsr_options:
   - noGSR
 
 fc_types:
+  - corr
   - glasso
 
 # ROI coverage masking (uses IHB coverage, same as glasso precomputation)

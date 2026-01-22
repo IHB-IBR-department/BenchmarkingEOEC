@@ -1,0 +1,22 @@
+# ICC Quick Test
+# ==============
+# Computes ICC summaries for a small subset (fast sanity check).
+#
+# Usage (copy-paste):
+#   source venv/bin/activate && PYTHONPATH=. python -m benchmarking.icc --config configs/icc_atlas.yaml
+
+data_source:
+  fc: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/icc_precomputed_fc"
+
+atlases: [AAL]
+strategies: all  # e.g. [1, 2, AROMA_aggr]
+fc_types: [corr, pc, tang, glasso]  
+icc: [icc31, icc21, icc11]
+
+
+mask: true
+mask_percentile: 95
+save_edgewise: true
+edgewise_output_dir: "results/icc_results"
+output: "results/icc_results/icc_summary_quick.csv"
+pattern: "*.npy"

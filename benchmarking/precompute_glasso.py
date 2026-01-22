@@ -29,12 +29,15 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from pathlib import Path
 
 import numpy as np
 
 from benchmarking.fc import ConnectomeTransformer, _resolve_coverage_mask
+from benchmarking.hcpex_preprocess import preprocess_hcpex_timeseries
+from benchmarking.project import resolve_data_root
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +128,88 @@ def iter_timeseries_files(input_path: Path, output_dir: Path) -> list[Path]:
     return files
 
 
+def parse_atlas_and_site(path: Path) -> tuple[str | None, str | None]:
+    """Extract atlas name and site from time series file path.
+
+    Returns:
+        Tuple of (atlas, site) where each can be None if not found
+    """
+    name = path.name
+
+    # Try to extract from filename pattern: {site}_{condition}_{atlas}_strategy-...
+    match = re.match(r"^(ihb|china)_(?:close|open)\d*_(?P<atlas>[^_]+)_strategy-", name)
+    if match:
+        return match.group("atlas"), match.group(1)
+
+    # Try to extract atlas from parent directory
+    atlas = None
+    if path.parent.name not in ("timeseries_ihb", "timeseries_china"):
+        atlas = path.parent.name
+
+    # Try to extract site from path
+    site = None
+    if name.startswith("ihb_"):
+        site = "ihb"
+    elif name.startswith("china_"):
+        site = "china"
+    elif "timeseries_ihb" in path.parts:
+        site = "ihb"
+    elif "timeseries_china" in path.parts:
+        site = "china"
+
+    return atlas, site
+
+
+def preprocess_timeseries_if_needed(
+    timeseries: np.ndarray,
+    path: Path,
+    data_root: str | None,
+) -> tuple[np.ndarray, bool]:
+    """Apply HCPex preprocessing if the file is for HCPex atlas.
+
+    Args:
+        timeseries: Raw time series data
+        path: Path to the time series file
+        data_root: Data root directory
+
+    Returns:
+        Tuple of (preprocessed timeseries, was_hcpex_preprocessed)
+        The boolean flag indicates whether HCPex preprocessing was applied
+    """
+    atlas, site = parse_atlas_and_site(path)
+
+    if atlas is None or site is None:
+        return timeseries, False
+
+    if atlas.upper() != "HCPEX":
+        return timeseries, False
+
+    if site not in ("ihb", "china"):
+        print(f"Warning: Unknown site '{site}' for HCPex preprocessing, skipping")
+        return timeseries, False
+
+    # Apply HCPex preprocessing
+    try:
+        data_root_path = resolve_data_root(data_root)
+        mask_path = Path(data_root_path) / "coverage" / "hcp_mask.npy"
+
+        if not mask_path.exists():
+            print(f"Warning: HCPex mask not found at {mask_path}, skipping preprocessing")
+            return timeseries, False
+
+        preprocessed = preprocess_hcpex_timeseries(
+            timeseries,
+            site=site,
+            mask_path=mask_path,
+        )
+        print(f"   HCPex preprocessing: {timeseries.shape} -> {preprocessed.shape}")
+        return preprocessed, True
+
+    except Exception as e:
+        print(f"Warning: HCPex preprocessing failed: {e}, using original data")
+        return timeseries, False
+
+
 def compute_glasso(
     timeseries: np.ndarray,
     *,
@@ -198,7 +283,12 @@ def main() -> int:
                 skipped += 1
                 continue
 
-            if coverage_arg is not None:
+            # Apply HCPex preprocessing if needed (before coverage masking)
+            # HCPex preprocessing already includes masking, so skip coverage mask if applied
+            timeseries, hcpex_preprocessed = preprocess_timeseries_if_needed(timeseries, path, args.data_root)
+
+            # Only apply coverage masking if not HCPex (HCPex preprocessing already includes masking)
+            if coverage_arg is not None and not hcpex_preprocessed:
                 mask = _resolve_coverage_mask(
                     strategy_path=path,
                     coverage=coverage_arg,

@@ -378,6 +378,15 @@ Few-shot:
 - `results/*_summary_*.csv` aggregated summaries
 - `results/*_splits.yaml` saved subject splits
 
+QC–FC:
+- `results/qcfc/qc_fc_*.csv` per-pipeline QC–FC summaries
+- `results/qcfc/edge_correlations/*.npy` edge-wise correlations (if enabled in config)
+
+ICC (China close test–retest):
+- `<data_root>/icc_precomputed_fc/<atlas>/*.npy` precomputed FC vectors with session axis
+- `icc_results/icc_summary_*.csv` per-pipeline ICC summary table (mean/std, masked/unmasked)
+- `icc_results/*_edgewise_icc_all.pkl` and `icc_results/*_edgewise_icc_masked.pkl` edge-wise ICC vectors (if enabled)
+
 ## Coverage-based ROI masking (optional)
 
 This option masks FC edges that touch ROIs with poor coverage in either site.
@@ -425,6 +434,12 @@ Notes:
 - The same `coverage_mask` block is supported in both cross-site and few-shot configs.
 
 ## Quick usage (examples)
+
+QC–FC:
+- `source venv/bin/activate && PYTHONPATH=. python -m benchmarking.qc_fc --config configs/qc_fc_quick.yaml`
+
+ICC (prepare + summary):
+- `source venv/bin/activate && PYTHONPATH=. python -m benchmarking.icc --config configs/icc_quick.yaml`
 
 Cross-site (classification + outputs for comparisons):
 - `PYTHONPATH=. python -m benchmarking.cross_site --config configs/cross_site_quick_classification.yaml`

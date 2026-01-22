@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarking.icc_computation import (
+from benchmarking.icc import (
     compute_icc_edgewise,
     compute_icc_mask,
     compute_icc_summary,
