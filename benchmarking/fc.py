@@ -750,6 +750,179 @@ def compute_fc_from_strategy_file(
 
 
 # =============================================================================
+# Classification-ready FC computation (leakage-safe)
+# =============================================================================
+
+def compute_fc_vectorized(
+    ts: np.ndarray,
+    *,
+    fc_type: str,
+    coverage_mask: Optional[np.ndarray] = None,
+    glasso_lambda: float = 0.03,
+    tangent_transformer: Optional['ConnectomeTransformer'] = None,
+) -> tuple[np.ndarray, Optional['ConnectomeTransformer']]:
+    """
+    Compute VECTORIZED FC for a single site's timeseries.
+
+    All FC is returned as vectorized (2D: n_samples, n_edges).
+    For tangent, can use a pre-fitted transformer for leakage control.
+
+    Parameters
+    ----------
+    ts : np.ndarray
+        Timeseries, shape (n_samples, n_timepoints, n_rois)
+    fc_type : str
+        FC type: 'corr', 'partial', 'tangent', 'glasso'
+    coverage_mask : np.ndarray, optional
+        Boolean mask of good ROIs (True = keep)
+    glasso_lambda : float
+        L1 regularization for glasso
+    tangent_transformer : ConnectomeTransformer, optional
+        Pre-fitted tangent transformer (for leakage-safe test computation).
+        If provided with fc_type='tangent', uses this transformer.
+        If None and fc_type='tangent', fits a new transformer.
+
+    Returns
+    -------
+    fc : np.ndarray
+        Vectorized FC, shape (n_samples, n_edges)
+    transformer : ConnectomeTransformer or None
+        Fitted tangent transformer (only for tangent, None otherwise).
+        Use this to transform test data with the same reference.
+    """
+    # Apply coverage mask BEFORE FC computation
+    if coverage_mask is not None:
+        coverage_mask = np.asarray(coverage_mask, dtype=bool)
+        if coverage_mask.shape[0] != ts.shape[2]:
+            raise ValueError(
+                f"Coverage mask length {coverage_mask.shape[0]} does not match "
+                f"ROI count {ts.shape[2]}"
+            )
+        ts = ts[:, :, coverage_mask]
+
+    kind_map = {
+        'corr': 'corr',
+        'partial': 'partial',
+        'tangent': 'tangent',
+        'glasso': 'glasso',
+    }
+    if fc_type not in kind_map:
+        raise ValueError(f"Unknown fc_type: {fc_type}. Valid: {list(kind_map.keys())}")
+
+    kind = kind_map[fc_type]
+
+    if kind == 'tangent':
+        if tangent_transformer is not None:
+            # Use pre-fitted transformer (leakage-safe for test data)
+            if not tangent_transformer.is_fitted_:
+                raise ValueError("tangent_transformer must be fitted")
+            fc = tangent_transformer.transform(ts)
+            return fc, tangent_transformer
+        else:
+            # Fit new transformer (for training data)
+            transformer = ConnectomeTransformer(
+                kind='tangent',
+                vectorize=True,
+                discard_diagonal=True,
+            )
+            fc = transformer.fit_transform(ts)
+            return fc, transformer
+    else:
+        # For corr/partial/glasso, no cross-sample reference needed
+        transformer = ConnectomeTransformer(
+            kind=kind,
+            vectorize=True,
+            discard_diagonal=True,
+            glasso_lambda=glasso_lambda,
+        )
+        fc = transformer.fit_transform(ts)
+        return fc, None
+
+
+def compute_fc_train_test(
+    ts_train: np.ndarray,
+    ts_test: np.ndarray,
+    *,
+    fc_type: str,
+    coverage_mask: Optional[np.ndarray] = None,
+    glasso_lambda: float = 0.03,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute VECTORIZED FC for train and test data with leakage-safe tangent.
+
+    CRITICAL: For tangent, reference is fitted on ts_train ONLY.
+
+    Parameters
+    ----------
+    ts_train : np.ndarray
+        Training timeseries, shape (n_train, n_timepoints, n_rois)
+    ts_test : np.ndarray
+        Test timeseries, shape (n_test, n_timepoints, n_rois)
+        NOTE: Can have different n_timepoints than ts_train.
+    fc_type : str
+        FC type: 'corr', 'partial', 'tangent', 'glasso'
+    coverage_mask : np.ndarray, optional
+        Boolean mask of good ROIs (True = keep)
+    glasso_lambda : float
+        L1 regularization for glasso
+
+    Returns
+    -------
+    X_train : np.ndarray
+        Training FC, shape (n_train, n_edges) - VECTORIZED
+    X_test : np.ndarray
+        Test FC, shape (n_test, n_edges) - VECTORIZED
+    """
+    # Compute FC for train (and get tangent transformer if applicable)
+    X_train, tangent_transformer = compute_fc_vectorized(
+        ts_train,
+        fc_type=fc_type,
+        coverage_mask=coverage_mask,
+        glasso_lambda=glasso_lambda,
+        tangent_transformer=None,  # Fit new for train
+    )
+
+    # Compute FC for test (use train's tangent transformer for leakage control)
+    X_test, _ = compute_fc_vectorized(
+        ts_test,
+        fc_type=fc_type,
+        coverage_mask=coverage_mask,
+        glasso_lambda=glasso_lambda,
+        tangent_transformer=tangent_transformer,  # Use train's reference
+    )
+
+    return X_train, X_test
+
+
+def get_fc_types_to_compute(
+    requested_fc_types: list[str],
+    skip_glasso: bool = False,
+) -> list[str]:
+    """
+    Filter FC types based on skip_glasso option.
+
+    Parameters
+    ----------
+    requested_fc_types : list[str]
+        Requested FC types (e.g., ['corr', 'partial', 'tangent', 'glasso'])
+    skip_glasso : bool
+        If True, remove 'glasso' from the list
+
+    Returns
+    -------
+    list[str]
+        Filtered FC types
+    """
+    valid_types = {'corr', 'partial', 'tangent', 'glasso'}
+    fc_types = [fc for fc in requested_fc_types if fc in valid_types]
+
+    if skip_glasso:
+        fc_types = [fc for fc in fc_types if fc != 'glasso']
+
+    return fc_types
+
+
+# =============================================================================
 # Legacy function for backward compatibility
 # =============================================================================
 

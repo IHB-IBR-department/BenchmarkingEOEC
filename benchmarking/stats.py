@@ -466,6 +466,7 @@ def run_classification_with_permutation(
     scale: Optional[bool] = None,
     return_probabilities: bool = False,
     return_test_outputs: bool = False,
+    vectorize: bool = True,
 ) -> dict:
     """
     Run classification with integrated permutation testing.
@@ -476,11 +477,13 @@ def run_classification_with_permutation(
     Parameters
     ----------
     X_train : np.ndarray
-        Training FC matrices (n_train, n_rois, n_rois)
+        Training FC matrices (n_train, n_rois, n_rois) if vectorize=True,
+        or already vectorized features (n_train, n_features) if vectorize=False.
     y_train : np.ndarray
         Training labels
     X_test : np.ndarray
-        Test FC matrices (n_test, n_rois, n_rois)
+        Test FC matrices (n_test, n_rois, n_rois) if vectorize=True,
+        or already vectorized features (n_test, n_features) if vectorize=False.
     y_test : np.ndarray
         Test labels
     pca_components : float
@@ -489,6 +492,9 @@ def run_classification_with_permutation(
         Random seed
     n_permutations : int
         Number of permutations (0 to skip permutation test)
+    vectorize : bool, default=True
+        If True, vectorize FC matrices using sym_matrix_to_vec.
+        If False, assume input is already vectorized (2D feature arrays).
 
     Returns
     -------
@@ -509,7 +515,7 @@ def run_classification_with_permutation(
         pca_components=pca_components,
         random_state=random_state,
         scale=scale,
-        vectorize=True,
+        vectorize=vectorize,
     )
 
     # Train classifier

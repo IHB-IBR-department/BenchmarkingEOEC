@@ -1,0 +1,53 @@
+# QC-FC Full Configuration
+# =========================
+# Runs QC-FC for all pipeline combinations.
+
+# Data paths
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+
+# Sites to analyze
+sites:
+  - ihb
+  - china
+
+# Pipeline parameters
+atlases:
+  - AAL
+  - Schaefer200
+  - Brainnetome
+  - HCPex
+
+# Strategies: 1-6 are standard denoising, AROMA_aggr/AROMA_nonaggr are ICA-AROMA
+strategies:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - AROMA_aggr
+  - AROMA_nonaggr
+
+gsr_options:
+  - GSR
+  - noGSR
+
+fc_types:
+  - corr
+  - partial
+  - tangent
+  - glasso
+
+# ROI coverage masking (uses IHB coverage, same as glasso precomputation)
+use_coverage_mask: true
+coverage_threshold: 0.1
+
+# Execution
+n_workers: 4
+
+# Output
+output: "results/qcfc/qc_fc_full.csv"
+
+# Edge-wise correlations (optional)
+save_edge_correlations: false
+edge_correlations_dir: "results/qcfc/edge_correlations"
