@@ -5,7 +5,7 @@
 #
 # Usage:
 #   # Run from repo root:
-#   source venv/bin/activate && python -m benchmarking.tangent_leakage --config configs/tangent_leakage_quick.yaml
+#   source venv/bin/activate && python -m benchmarking.ml.tangent_leakage --config configs/tangent_leakage_quick.yaml
 
 # Data path (IHB time series, Schaefer200 atlas, Strategy-4 with GSR)
 data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/schafer200_time-series/ihb"

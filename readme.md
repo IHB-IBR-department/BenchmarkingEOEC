@@ -11,6 +11,8 @@ Preprocessed time series data are available for download:
 - **Beijing (China) EOEC dataset**: [Google Drive link](https://drive.google.com/file/d/1N1wdbF0tsrAzL9GSgUK_y4xBNDiPLH5X/view?usp=sharing)
 - **IHB (St. Petersburg) dataset**: [link TBD]
 
+**For detailed data format descriptions, see [DataDescription.md](DataDescription.md).**
+
 ## Dataset description
 
 This study uses two resting-state fMRI datasets with Eyes Open (EO) and Eyes Closed (EC) conditions:
@@ -33,6 +35,7 @@ This study uses two resting-state fMRI datasets with Eyes Open (EO) and Eyes Clo
 | Timepoints | 240 TRs per run |
 | TR | 2.0s |
 | Session mapping | Variable per subject (see BeijingEOEC.csv) |
+| Original source | https://fcon_1000.projects.nitrc.org/indi/retro/BeijingEOEC.html |
 
 ### Preprocessing pipelines
 
@@ -157,19 +160,19 @@ To regenerate aggregated data from per-subject CSVs:
 **IHB (St. Petersburg) data:**
 ```bash
 # Standard denoising pipelines (strategies 1-6)
-python -m benchmarking.aggregate_ihb
+python -m data_utils.preprocessing.aggregate_ihb
 
 # AROMA pipelines (all 4 atlases)
-python -m benchmarking.aggregate_ihb --aroma
+python -m data_utils.preprocessing.aggregate_ihb --aroma
 ```
 
 **China (Beijing) data:**
 ```bash
 # Standard denoising pipelines
-python -m benchmarking.aggregate_china
+python -m data_utils.preprocessing.aggregate_china
 
 # AROMA pipelines (all 4 atlases)
-python -m benchmarking.aggregate_china --aroma
+python -m data_utils.preprocessing.aggregate_china --aroma
 ```
 
 ### Loading example
@@ -244,7 +247,7 @@ with open('timeseries_china/Schaefer200/subject_order_china.txt') as f:
 ### Computing functional connectivity
 
 ```python
-from benchmarking.fc import ConnectomeTransformer
+from data_utils.fc import ConnectomeTransformer
 
 # Leakage-safe FC computation (important for tangent space)
 transformer = ConnectomeTransformer(kind='corr', vectorize=True)
@@ -254,11 +257,11 @@ X_train = transformer.fit_transform(train_timeseries)
 X_test = transformer.transform(test_timeseries)
 ```
 
-## Classification pipeline (cross_site and few_shot)
+## Classification pipeline (ML)
 
-The core pipeline is implemented in `benchmarking/cross_site.py` (cross-site) and
-`benchmarking/few_shot.py` (few-shot domain adaptation). The steps are the same for
-both schemes, with different train/test definitions.
+The unified pipeline lives in `benchmarking/ml/pipeline.py` and runs:
+cross-site (both directions) + few-shot adaptation for a single preprocessing
+configuration.
 
 1) Load FC matrices per site and pipeline
    - FC types: corr, partial, tangent, glasso
@@ -293,7 +296,7 @@ both schemes, with different train/test definitions.
 
 7) Metrics and outputs
    - Metrics: accuracy, ROC-AUC, Brier score.
-   - Optional permutation test vs chance when `n_permutations > 0`.
+   - Optional permutation test vs chance when `--n-permutations > 0`.
    - Cross-site can also save per-sample outputs for paired comparisons.
 
 ## Preventing subject leakage and keeping splits identical
@@ -315,11 +318,11 @@ Permutation test:
 
 ## PCA choice
 
-The default `pca_components: 0.95` retains 95% variance to stabilize training on
+The default `--pca-components 0.95` retains 95% variance to stabilize training on
 high-dimensional FC edge features. This reduces overfitting and improves
 numerical stability for linear models. The number of components is stored in
 outputs for transparency. You can set a fixed number of components or disable
-PCA entirely via config.
+PCA entirely via CLI.
 
 ## Statistical testing and pipeline comparisons
 
@@ -339,19 +342,18 @@ randomization (sign-flip) tests with matched pipelines. This aggregates per-samp
 losses to subject-level means before testing.
 
 Required inputs for paired comparisons:
-- `results/cross_site/<train>2<test>/*_test_outputs.csv` (from cross-site with `save_test_outputs: true`)
-- `results/cross_site/<train>2<test>/*_pipeline_abbreviations.csv` (maps P0001.. to full pipeline specs)
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/cross_site_<train>2<test>_test_outputs.csv` (from pipeline runs)
+- `pipeline_abbreviations.csv` if you want abbrev-based comparisons
 
 Helper scripts:
-- `benchmarking/pipeline_comparisons.py` (CLI for factor and A vs B tests)
-- `run_comparisons.sh` (convenience wrapper)
+- `benchmarking/ml/pipeline_comparisons.py` (CLI for factor and A vs B tests)
 
 ## Tangent leakage experiment
 
 Tangent FC uses a reference matrix; if computed on all subjects before splitting,
 information can leak from test to train. The repo includes an explicit check:
 
-- Script: `benchmarking/tangent_leakage.py`
+- Script: `benchmarking/ml/tangent_leakage.py`
 - Method: compare LEAK (reference on all subjects) vs NO_LEAK (reference fit on
   train subjects only) using GroupKFold with subject-level splits.
 - EO and EC scans from the same subject are kept in the same fold.
@@ -366,17 +368,14 @@ Outputs:
 
 ## Outputs overview
 
-Cross-site:
-- `results/cross_site/<train>2<test>/*_results.csv` per pipeline results
-- `results/cross_site/<train>2<test>/*_summary_*.csv` aggregated summaries
-- `results/cross_site/<train>2<test>/*_test_outputs.csv` per-sample outputs (if enabled)
-- `results/cross_site/<train>2<test>/*_pipeline_abbreviations.csv` mapping of pipeline abbrev to spec
-- `results/cross_site/<train>2<test>/pipeline_predictions.csv` wide prediction matrix
+Cross-site (per pipeline):
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/cross_site_ihb2china_results.csv`
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/cross_site_china2ihb_results.csv`
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/cross_site_*_test_outputs.csv` per-sample outputs (if enabled)
 
-Few-shot:
-- `results/*_results.csv` per pipeline per repeat
-- `results/*_summary_*.csv` aggregated summaries
-- `results/*_splits.yaml` saved subject splits
+Few-shot (per pipeline):
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/few_shot_results.csv` per repeat
+- `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/summary.csv` combined summary
 
 QC–FC:
 - `results/qcfc/qc_fc_*.csv` per-pipeline QC–FC summaries
@@ -409,16 +408,16 @@ When `mask_dir` is null, masks are computed once per atlas from
 ### Option B: use precomputed masks
 Generate masks once:
 ```
-PYTHONPATH=. python -m benchmarking.coverage_bad_rois --threshold 0.1 --output-dir benchmarking
+PYTHONPATH=. python -m data_utils.coverage --threshold 0.1 --output-dir results/coverage_masks
 ```
 Then point YAML to that folder:
 ```
 coverage_mask:
   enabled: true
   threshold: 0.1
-  mask_dir: "benchmarking"
+  mask_dir: "results/coverage_masks"
 ```
-Coverage overlap summary (threshold 0.1, from `coverage_bad_rois`):
+Coverage overlap summary (threshold 0.1, from `data_utils.coverage`):
 
 | Atlas | IHB good | China good | Both good | Bad (either) |
 |-------|----------|------------|-----------|--------------|
@@ -439,22 +438,19 @@ QC–FC:
 - `source venv/bin/activate && PYTHONPATH=. python -m benchmarking.qc_fc --config configs/qc_fc_quick.yaml`
 
 ICC (prepare + summary):
-- `source venv/bin/activate && PYTHONPATH=. python -m benchmarking.icc --config configs/icc_quick.yaml`
+- `source venv/bin/activate && PYTHONPATH=. python -m benchmarking.icc --config configs/icc_atlas.yaml`
 
-Cross-site (classification + outputs for comparisons):
-- `PYTHONPATH=. python -m benchmarking.cross_site --config configs/cross_site_quick_classification.yaml`
+ML pipeline (cross-site + few-shot, one pipeline):
+- `PYTHONPATH=. python -m benchmarking.ml.pipeline --atlas Schaefer200 --strategy 1 --gsr GSR --precomputed-glasso ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc`
 
-Few-shot:
-- `PYTHONPATH=. python -m benchmarking.few_shot --config configs/few_shot_quick.yaml`
+Permutation demo (add permutations, small test):
+- `PYTHONPATH=. python -m benchmarking.ml.pipeline --atlas Schaefer200 --strategy 1 --gsr GSR --skip-glasso --n-permutations 100`
 
-Permutation demo (correlation only, small test):
-- `PYTHONPATH=. python -m benchmarking.cross_site --config configs/cross_site_corr_schaefer_perm.yaml`
-
-Pipeline comparisons (after running a cross-site config with `save_test_outputs: true`):
+Pipeline comparisons (after running ML pipeline with `save_test_outputs: true`):
 - Factor-level test (GSR vs noGSR):
-  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons factor --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --factor gsr --level-a GSR --level-b noGSR`
+  `PYTHONPATH=. python -m benchmarking.ml.pipeline_comparisons factor --test-outputs results/pipelines/Schaefer200_strategy-1_GSR/cross_site_ihb2china_test_outputs.csv --factor gsr --level-a GSR --level-b noGSR`
 - Factor-level test (FC type: tangent vs corr):
-  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons factor --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --factor fc_type --level-a tangent --level-b corr`
-- Pipeline A vs B (by abbreviation):
-  `PYTHONPATH=. python -m benchmarking.pipeline_comparisons compare --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv --abbrev results/cross_site/ihb2china/cross_site_quick_classification_pipeline_abbreviations.csv --pipeline-a P0001 --pipeline-b P0003`
-Use `results/cross_site/china2ihb/...` for the opposite direction.
+  `PYTHONPATH=. python -m benchmarking.ml.pipeline_comparisons factor --test-outputs results/pipelines/Schaefer200_strategy-1_GSR/cross_site_ihb2china_test_outputs.csv --factor fc_type --level-a tangent --level-b corr`
+- Pipeline A vs B (by abbreviation, if you have an abbreviations CSV):
+  `PYTHONPATH=. python -m benchmarking.ml.pipeline_comparisons compare --test-outputs results/pipelines/Schaefer200_strategy-1_GSR/cross_site_ihb2china_test_outputs.csv --abbrev results/pipelines/pipeline_abbreviations.csv --pipeline-a P0001 --pipeline-b P0003`
+Use `cross_site_china2ihb_test_outputs.csv` for the opposite direction.

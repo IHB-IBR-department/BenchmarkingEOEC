@@ -16,7 +16,7 @@ from typing import Iterable
 
 import numpy as np
 
-from benchmarking.project import resolve_data_root
+from data_utils.paths import resolve_data_root
 
 
 DEFAULT_ATLASES = ("AAL", "Schaefer200", "Brainnetome", "HCPex")
@@ -91,8 +91,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="benchmarking",
-        help="Output directory for bad-ROI masks (default: benchmarking)",
+        default="results/coverage_masks",
+        help="Output directory for bad-ROI masks (default: results/coverage_masks)",
     )
     parser.add_argument(
         "--atlases",

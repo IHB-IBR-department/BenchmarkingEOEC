@@ -8,7 +8,7 @@ from benchmarking.icc import (
     compute_icc_mask,
     compute_icc_summary,
 )
-from benchmarking.project import resolve_data_root
+from data_utils.paths import resolve_data_root
 
 
 class TestICCComputation(unittest.TestCase):

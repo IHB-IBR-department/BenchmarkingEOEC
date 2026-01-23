@@ -1,26 +1,5 @@
 """
-BenchmarkingEOEC: benchmarking utilities and experiment scripts.
+BenchmarkingEOEC: analysis entrypoints (ICC, QC-FC, ML).
 
-Data layout and naming conventions live in `.claude/skills/data_handling.md`.
-Use `benchmarking.project.resolve_data_root()` to standardize data-root handling.
+Data layout and preprocessing live in data_utils/ and DataDescription.md.
 """
-
-from .project import (
-    DATA_ROOT_ENV,
-    DEFAULT_DATA_ROOT,
-    FC_NAME_MAP,
-    glasso_path,
-    resolve_data_root,
-    standard_fc_filename,
-    standard_fc_path,
-)
-
-__all__ = [
-    "DATA_ROOT_ENV",
-    "DEFAULT_DATA_ROOT",
-    "FC_NAME_MAP",
-    "resolve_data_root",
-    "standard_fc_filename",
-    "standard_fc_path",
-    "glasso_path",
-]

@@ -2,24 +2,24 @@
 """
 Precompute glasso FC matrices from time-series files in a folder tree.
 
-Skips outputs that already exist and preserves the input folder structure
-under the output directory.
+Skips outputs that already exist and writes into
+`glasso_precomputed_fc/{site}/{atlas}/` under the chosen output root.
 
 Examples:
   # Precompute glasso for a time-series tree (default coverage=ihb)
-  PYTHONPATH=. python -m benchmarking.precompute_glasso \
+  PYTHONPATH=. python -m data_utils.preprocessing.precompute_glasso \
     --input-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_ihb/AAL \
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
     --print-timing
 
   # Precompute glasso for a single file
-  PYTHONPATH=. python -m benchmarking.precompute_glasso \
+  PYTHONPATH=. python -m data_utils.preprocessing.precompute_glasso \
     --input ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_ihb/Schaefer200/ihb_close_Schaefer200_strategy-1_GSR.npy \
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
     --print-timing
 
   # Use an explicit coverage source and threshold
-  PYTHONPATH=. python -m benchmarking.precompute_glasso \
+  PYTHONPATH=. python -m data_utils.preprocessing.precompute_glasso \
     --input-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_china \
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
     --coverage china \
@@ -35,9 +35,9 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarking.fc import ConnectomeTransformer, _resolve_coverage_mask
-from benchmarking.hcpex_preprocess import preprocess_hcpex_timeseries
-from benchmarking.project import resolve_data_root
+from data_utils.fc import ConnectomeTransformer, _resolve_coverage_mask
+from data_utils.hcpex import preprocess_hcpex_timeseries
+from data_utils.paths import resolve_data_root
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Output base directory (default: <input_dir_parent>/glasso_precomputed_fc).",
+        help="Output base directory (default: <data_root>/glasso_precomputed_fc).",
     )
     parser.add_argument(
         "--data-root",
@@ -230,6 +230,14 @@ def compute_glasso(
     return transformer.fit_transform(timeseries)
 
 
+def _resolve_output_dir(output_root: Path, site: str, atlas: str) -> Path:
+    if output_root.parts[-2:] == (site, atlas):
+        return output_root
+    if output_root.name == site:
+        return output_root / atlas
+    return output_root / site / atlas
+
+
 def main() -> int:
     args = parse_args()
 
@@ -244,13 +252,8 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
 
-    input_root = input_path if input_path.is_dir() else input_path.parent
-
-    output_dir = (
-        Path(args.output_dir).expanduser()
-        if args.output_dir
-        else input_root.parent / "glasso_precomputed_fc"
-    )
+    data_root = resolve_data_root(args.data_root)
+    output_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(data_root) / "glasso_precomputed_fc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     coverage_arg = normalize_coverage_arg(args.coverage)
@@ -268,8 +271,12 @@ def main() -> int:
     failed = 0
 
     for path in files:
-        rel = path.relative_to(input_root)
-        out_dir = output_dir / rel.parent
+        atlas, site = parse_atlas_and_site(path)
+        if atlas is None or site is None:
+            print(f"Skip {path} (unable to parse site/atlas)")
+            skipped += 1
+            continue
+        out_dir = _resolve_output_dir(output_dir, site, atlas)
         out_path = out_dir / f"{path.stem}_glasso.npy"
 
         if out_path.exists():

@@ -9,7 +9,7 @@ to ensure consistent ROI dimensions before functional connectivity estimation.
 import numpy as np
 from pathlib import Path
 
-from benchmarking.hcpex_preprocess import preprocess_hcpex_timeseries
+from data_utils.hcpex import preprocess_hcpex_timeseries
 
 
 def main():

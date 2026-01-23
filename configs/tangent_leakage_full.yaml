@@ -5,7 +5,7 @@
 #
 # Usage:
 #   # Run from repo root:
-#   source venv/bin/activate && python -m benchmarking.tangent_leakage --config configs/tangent_leakage_full.yaml
+#   source venv/bin/activate && python -m benchmarking.ml.tangent_leakage --config configs/tangent_leakage_full.yaml
 #
 # Expected runtime: ~10-15 minutes depending on hardware
 

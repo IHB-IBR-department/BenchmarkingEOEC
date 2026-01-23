@@ -16,13 +16,22 @@ atlases:
 # Strategies: 1-6 are standard denoising, AROMA_aggr/AROMA_nonaggr are ICA-AROMA
 strategies:
   - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
   - AROMA_aggr
+  - AROMA_nonaggr
 
 gsr_options:
+  - GSR
   - noGSR
 
 fc_types:
   - corr
+  - partial
+  - tangent
   - glasso
 
 # ROI coverage masking (uses IHB coverage, same as glasso precomputation)
@@ -32,9 +41,10 @@ coverage_threshold: 0.1
 # Execution
 n_workers: 4
 
+
 # Output
-output: "results/qcfc/AAL/qc_fc_aal.csv"
+output: "results/qcfc/china/AAL/qc_fc_atlas.csv"
 
 # Edge-wise correlations (optional)
 save_edge_correlations: true
-edge_correlations_dir: "results/qcfc/AAL/edge_correlations"
+edge_correlations_dir: "results/qcfc/china/AAL/edge_correlations"

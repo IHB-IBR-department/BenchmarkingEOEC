@@ -30,10 +30,10 @@ use_coverage_mask: true
 coverage_threshold: 0.1
 
 # Execution
-n_workers: 4
+n_workers: 1
 
 # Output
-output: "results/qcfc/AAL/qc_fc_aal.csv"
+output: "results/qcfc/AAL/qc_fc_quick.csv"
 
 # Edge-wise correlations (optional)
 save_edge_correlations: true

@@ -14,7 +14,7 @@ The mask is saved as hcp_mask.npy in the coverage folder and can be used to
 ensure consistent dimensions for functional connectivity matrices across sites.
 
 Usage:
-    python -m benchmarking.create_hcpex_mask --threshold 0.1
+    python -m data_utils.preprocessing.create_hcpex_mask --threshold 0.1
 
 The mask is a boolean array where True indicates a "bad" ROI to exclude.
 """
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarking.project import resolve_data_root
+from data_utils.paths import resolve_data_root
 
 
 def load_coverage(coverage_dir: Path, threshold: float = 0.1) -> np.ndarray:
@@ -147,13 +147,13 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Examples:
     # Use default threshold (0.1) and auto-detect data root
-    python -m benchmarking.create_hcpex_mask
+    python -m data_utils.preprocessing.create_hcpex_mask
 
     # Custom threshold
-    python -m benchmarking.create_hcpex_mask --threshold 0.15
+    python -m data_utils.preprocessing.create_hcpex_mask --threshold 0.15
 
     # Specify data root explicitly
-    python -m benchmarking.create_hcpex_mask --data-root /path/to/data
+    python -m data_utils.preprocessing.create_hcpex_mask --data-root /path/to/data
         """,
     )
     parser.add_argument(

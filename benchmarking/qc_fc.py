@@ -21,7 +21,7 @@ Approach:
       - open → run-2 or run-3 (depends on subject)
 
 Usage:
-    python -m benchmarking.qc_fc --config configs/qc_fc_quick.yaml
+    python -m benchmarking.qc_fc --config configs/qc_fc_atlas.yaml
 
 Author: BenchmarkingEOEC Team
 """
@@ -40,8 +40,8 @@ from nilearn.connectome import sym_matrix_to_vec
 import yaml
 from tqdm import tqdm
 
-from benchmarking.project import resolve_data_root
-from benchmarking.fc import ConnectomeTransformer
+from data_utils.paths import resolve_data_root
+from data_utils.fc import ConnectomeTransformer
 
 
 # =============================================================================

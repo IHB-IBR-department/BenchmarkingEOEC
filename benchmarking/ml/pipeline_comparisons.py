@@ -2,8 +2,8 @@
 """
 Run pipeline comparison tests from precomputed cross-site outputs.
 
-This script is a thin CLI wrapper around benchmarking.stats functions.
-It operates on CSVs produced by benchmarking/cross_site.py with
+This script is a thin CLI wrapper around benchmarking.ml.stats functions.
+It operates on CSVs produced by benchmarking.ml.pipeline with
 save_test_outputs: true.
 It prints results to stdout and writes a JSON file next to the input
 test-outputs CSV (override with --output).
@@ -16,15 +16,15 @@ Output
 Examples
 --------
 # Factor-level test (GSR vs noGSR) for one direction
-python benchmarking/pipeline_comparisons.py factor \
-  --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv \
+python -m benchmarking.ml.pipeline_comparisons factor \
+  --test-outputs results/pipelines/Schaefer200_strategy-1_GSR/cross_site_ihb2china_test_outputs.csv \
   --factor gsr --level-a GSR --level-b noGSR \
   --train-site ihb --test-site china
 
 # Pipeline A vs B (by abbrev)
-python benchmarking/pipeline_comparisons.py compare \
-  --test-outputs results/cross_site/ihb2china/cross_site_quick_classification_test_outputs.csv \
-  --abbrev results/cross_site/ihb2china/cross_site_quick_classification_pipeline_abbreviations.csv \
+python -m benchmarking.ml.pipeline_comparisons compare \
+  --test-outputs results/pipelines/Schaefer200_strategy-1_GSR/cross_site_ihb2china_test_outputs.csv \
+  --abbrev results/pipelines/pipeline_abbreviations.csv \
   --pipeline-a P0001 --pipeline-b P0002
 """
 
@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-from benchmarking import stats
+from benchmarking.ml import stats
 
 
 def _as_json(data: Any) -> str:

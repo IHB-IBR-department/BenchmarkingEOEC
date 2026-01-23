@@ -9,7 +9,7 @@ filters out some ROIs during extraction. This module provides functions to:
 3. Ensure both IHB and China data have the same ROI subset for FC computation
 
 Usage:
-    from benchmarking.hcpex_preprocess import preprocess_hcpex_timeseries
+    from data_utils.hcpex import preprocess_hcpex_timeseries
 
     # Load raw time series (varying dimensions)
     ihb_data = np.load("ihb_close_HCPex_strategy-1_GSR.npy")  # (84, 120, 423)

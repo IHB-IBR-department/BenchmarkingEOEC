@@ -12,19 +12,19 @@ Defaults to `<data_root>/timeseries_china` as input and
 `<data_root>/icc_precomputed_fc` as output when no paths are provided.
 
 Examples:
-  PYTHONPATH=. python -m benchmarking.icc_data_preparation \
+  PYTHONPATH=. python -m data_utils.preprocessing.icc_data_preparation \
     --input /path/to/china_close_AAL_strategy-1_GSR.npy \
     --output-dir /path/to/icc_precomputed_fc \
     --print-timing
 
-  PYTHONPATH=. python -m benchmarking.icc_data_preparation \
+  PYTHONPATH=. python -m data_utils.preprocessing.icc_data_preparation \
     --atlas AAL \
     --input-dir /path/to/timeseries_china/AAL \
     --output-dir /path/to/icc_precomputed_fc \
     --kinds corr pc tang glasso
 
   # Overwrite existing outputs for a single atlas
-  PYTHONPATH=. python -m benchmarking.icc_data_preparation \
+  PYTHONPATH=. python -m data_utils.preprocessing.icc_data_preparation \
     --atlas AAL \
     --input-dir /path/to/timeseries_china/AAL \
     --output-dir /path/to/icc_precomputed_fc \
@@ -32,7 +32,7 @@ Examples:
     --overwrite
 
   # Schaefer200 example with local data layout
-  PYTHONPATH=. python -m benchmarking.icc_data_preparation \
+  PYTHONPATH=. python -m data_utils.preprocessing.icc_data_preparation \
     --atlas Schaefer200 \
     --input-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/timeseries_china/Schaefer200 \
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/icc_precomputed_fc \
@@ -49,7 +49,7 @@ Glasso lookup:
   and copied as: <stem>_glasso.npy → <output_dir>/<atlas>/<stem>_glasso.npy
 
 Glasso-only example (copy + drop subject, with explicit precomputed path):
-  PYTHONPATH=. python -m benchmarking.icc_data_preparation \
+  PYTHONPATH=. python -m data_utils.preprocessing.icc_data_preparation \
     --atlas AAL \
     --glasso-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc \
     --output-dir ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/icc_precomputed_fc \
@@ -69,9 +69,9 @@ import shutil
 import numpy as np
 from tqdm import tqdm
 
-from benchmarking.fc import compute_fc_from_strategy_file
-from benchmarking.hcpex_preprocess import preprocess_hcpex_timeseries
-from benchmarking.project import resolve_data_root
+from data_utils.fc import _resolve_coverage_mask, compute_fc_from_strategy_file
+from data_utils.hcpex import preprocess_hcpex_timeseries
+from data_utils.paths import resolve_data_root
 
 
 def default_input_path(data_root: Path) -> Path:
@@ -171,6 +171,121 @@ def glasso_search_dir(glasso_root: Path, *, site: str, atlas: str) -> Path:
     """
     lowered = site.strip().lower()
     return glasso_root / lowered / atlas
+
+
+def _expected_edge_count(n_rois: int) -> int:
+    return (n_rois * (n_rois - 1)) // 2
+
+
+def _expected_fc_shape(
+    *,
+    strategy_path: Path,
+    timeseries: np.ndarray,
+    coverage: str | Path | np.ndarray | bool | None,
+    coverage_threshold: float,
+    data_root: str | Path | None,
+) -> tuple[int, int, int]:
+    n_subjects = timeseries.shape[0]
+    n_rois = timeseries.shape[2]
+    n_sessions = timeseries.shape[-1] if timeseries.ndim == 4 else 1
+
+    coverage_mask = _resolve_coverage_mask(
+        strategy_path=strategy_path,
+        coverage=coverage,
+        coverage_threshold=coverage_threshold,
+        data_path=data_root,
+    )
+    if coverage_mask is not None:
+        coverage_mask = np.asarray(coverage_mask, dtype=bool).reshape(-1)
+        if coverage_mask.shape[0] != n_rois:
+            raise ValueError(
+                f"Coverage mask length {coverage_mask.shape[0]} does not match ROI count "
+                f"{n_rois} for {strategy_path.name}"
+            )
+        kept = int(np.count_nonzero(coverage_mask))
+        if kept == 0:
+            raise ValueError("Coverage mask removed all ROIs.")
+        n_rois = kept
+
+    return n_subjects, _expected_edge_count(n_rois), n_sessions
+
+
+def _expected_fc_shape_tuple(
+    expected_subjects: int,
+    expected_edges: int,
+    expected_sessions: int,
+) -> tuple[int, ...]:
+    if expected_sessions == 1:
+        return (expected_subjects, expected_edges)
+    return (expected_subjects, expected_edges, expected_sessions)
+
+
+def _shape_matches_expected(
+    shape: tuple[int, ...],
+    *,
+    expected_subjects: int,
+    expected_edges: int,
+    expected_sessions: int,
+) -> bool:
+    if expected_sessions == 1:
+        return shape == (expected_subjects, expected_edges) or shape == (
+            expected_subjects,
+            expected_edges,
+            1,
+        )
+    return shape == (expected_subjects, expected_edges, expected_sessions)
+
+
+def _maybe_filter_fc_file_subjects(
+    fc_path: Path,
+    *,
+    subject_order: list[str] | None,
+    drop_subjects: Iterable[str],
+    expected_edges: int,
+    expected_sessions: int,
+) -> list[str]:
+    drop_list = [s for s in drop_subjects if s]
+    if not drop_list or subject_order is None:
+        return []
+
+    keep_idx, dropped = compute_keep_indices(subject_order, drop_list)
+    if not dropped:
+        return []
+
+    arr = np.load(fc_path, mmap_mode="r")
+    if expected_sessions == 1:
+        full_shapes = {
+            (len(subject_order), expected_edges),
+            (len(subject_order), expected_edges, 1),
+        }
+    else:
+        full_shapes = {(len(subject_order), expected_edges, expected_sessions)}
+
+    if arr.shape not in full_shapes:
+        return []
+
+    arr_full = np.load(fc_path)
+    np.save(fc_path, arr_full[keep_idx])
+    return dropped
+
+
+def _precomputed_glasso_matches_expected(
+    glasso_path: Path,
+    *,
+    expected_edges: int,
+    expected_sessions: int,
+    allowed_subject_counts: set[int],
+) -> bool:
+    arr = np.load(glasso_path, mmap_mode="r")
+    if expected_sessions == 1:
+        allowed_shapes = {
+            (n_sub, expected_edges) for n_sub in allowed_subject_counts
+        } | {(n_sub, expected_edges, 1) for n_sub in allowed_subject_counts}
+    else:
+        allowed_shapes = {
+            (n_sub, expected_edges, expected_sessions) for n_sub in allowed_subject_counts
+        }
+    return arr.shape in allowed_shapes
 
 
 def filter_subjects(
@@ -440,6 +555,13 @@ def process_series_folder(
         raise ValueError("No China time-series files found. This script expects China data.")
 
     atlas_value = atlas.strip()
+    coverage_effective = coverage_arg
+    if atlas_value.upper() == "HCPEX":
+        if coverage_arg is not None:
+            print(
+                "HCPex atlas: timeseries are pre-masked to 373 ROIs; disabling coverage filtering."
+            )
+        coverage_effective = None
     precomputed_glasso_dir = glasso_search_dir(glasso_root, site="china", atlas=atlas_value)
 
     candidates = [
@@ -458,10 +580,6 @@ def process_series_folder(
                 key: atlas_out / f"{path.stem}_{suffix}.npy"
                 for key, suffix in name_map.items()
             }
-            if overwrite:
-                missing_kinds = list(name_map.keys())
-            else:
-                missing_kinds = [key for key, out_path in out_paths.items() if not out_path.exists()]
 
             subject_order = load_subject_order(path)
             timeseries = np.load(path)
@@ -477,49 +595,85 @@ def process_series_folder(
             if dropped:
                 print(f"{path.name}: dropped {', '.join(dropped)}")
 
+            expected_subjects, expected_edges, expected_sessions = _expected_fc_shape(
+                strategy_path=path,
+                timeseries=timeseries,
+                coverage=coverage_effective,
+                coverage_threshold=coverage_threshold,
+                data_root=data_root,
+            )
+            expected_shape = _expected_fc_shape_tuple(
+                expected_subjects, expected_edges, expected_sessions
+            )
+
+            if overwrite:
+                missing_kinds = list(name_map.keys())
+            else:
+                missing_kinds = []
+                for key, out_path in out_paths.items():
+                    if not out_path.exists():
+                        missing_kinds.append(key)
+                        continue
+
+                    dropped_existing = _maybe_filter_fc_file_subjects(
+                        out_path,
+                        subject_order=subject_order,
+                        drop_subjects=drop_subjects,
+                        expected_edges=expected_edges,
+                        expected_sessions=expected_sessions,
+                    )
+                    if dropped_existing:
+                        print(
+                            f"{path.name}: dropped {', '.join(dropped_existing)} from existing {name_map[key]}"
+                        )
+
+                    existing = np.load(out_path, mmap_mode="r")
+                    if not _shape_matches_expected(
+                        existing.shape,
+                        expected_subjects=expected_subjects,
+                        expected_edges=expected_edges,
+                        expected_sessions=expected_sessions,
+                    ):
+                        print(
+                            f"{path.name}: stale {name_map[key]} shape {existing.shape}, expected {expected_shape}; recomputing."
+                        )
+                        missing_kinds.append(key)
+
             glasso_copied = False
-            if "glasso" not in missing_kinds and drop_subjects:
-                existing_glasso = out_paths.get("glasso")
-                if existing_glasso is not None and existing_glasso.exists():
-                    if subject_order is None:
-                        raise FileNotFoundError(
-                            "Subject order file not found; cannot drop subjects without ordering."
-                        )
-                    expected_keep, _ = compute_keep_indices(subject_order, drop_subjects)
-                    glasso = np.load(existing_glasso)
-                    if glasso.shape[0] == len(subject_order):
-                        filtered, glasso_dropped = filter_precomputed_glasso(
-                            glasso, subject_order, drop_subjects
-                        )
-                        np.save(existing_glasso, filtered)
-                        glasso_copied = True
-                        copied += 1
-                        if glasso_dropped:
-                            print(f"{path.name}: dropped {', '.join(glasso_dropped)} from glasso")
-                        print(f"Updated glasso: {existing_glasso}")
-                    elif glasso.shape[0] != len(expected_keep):
-                        raise ValueError(
-                            f"Glasso subject count {glasso.shape[0]} does not match subject order "
-                            f"({len(subject_order)}) or filtered count ({len(expected_keep)})."
-                        )
             if "glasso" in missing_kinds:
                 precomputed = find_precomputed_glasso(precomputed_glasso_dir, path.stem)
                 if precomputed is None:
                     print(f"Glasso not found for {path.stem} in {precomputed_glasso_dir}; skipping glasso.")
                     missing_kinds.remove("glasso")
                 else:
-                    glasso_copied = True
-                    glasso_dropped = copy_precomputed_glasso(
+                    allowed_subject_counts = {expected_subjects}
+                    if subject_order is not None:
+                        allowed_subject_counts.add(len(subject_order))
+                    if not _precomputed_glasso_matches_expected(
                         precomputed,
-                        out_paths["glasso"],
-                        subject_order=subject_order,
-                        drop_subjects=drop_subjects,
-                    )
-                    missing_kinds.remove("glasso")
-                    copied += 1
-                    if glasso_dropped:
-                        print(f"{path.name}: dropped {', '.join(glasso_dropped)} from glasso")
-                    print(f"Copied glasso: {out_paths['glasso']}")
+                        expected_edges=expected_edges,
+                        expected_sessions=expected_sessions,
+                        allowed_subject_counts=allowed_subject_counts,
+                    ):
+                        pre_shape = np.load(precomputed, mmap_mode="r").shape
+                        print(
+                            f"{path.name}: precomputed glasso shape {pre_shape} does not match expected "
+                            f"{expected_shape}; skipping glasso (recompute glasso with matching coverage)."
+                        )
+                        missing_kinds.remove("glasso")
+                    else:
+                        glasso_copied = True
+                        glasso_dropped = copy_precomputed_glasso(
+                            precomputed,
+                            out_paths["glasso"],
+                            subject_order=subject_order,
+                            drop_subjects=drop_subjects,
+                        )
+                        missing_kinds.remove("glasso")
+                        copied += 1
+                        if glasso_dropped:
+                            print(f"{path.name}: dropped {', '.join(glasso_dropped)} from glasso")
+                        print(f"Copied glasso: {out_paths['glasso']}")
 
             if not missing_kinds:
                 if glasso_copied:
@@ -535,7 +689,7 @@ def process_series_folder(
                     filtered_path,
                     tangent_connectivity=None,
                     kinds=[k for k in missing_kinds if k != "glasso"],
-                    coverage=coverage_arg,
+                    coverage=coverage_effective,
                     coverage_threshold=coverage_threshold,
                     data_path=data_root,
                     print_timing=print_timing,
@@ -633,28 +787,22 @@ def main() -> int:
         key: output_dir / f"{input_path.stem}_{suffix}.npy"
         for key, suffix in name_map.items()
     }
-    if args.overwrite:
-        missing_kinds = list(name_map.keys())
-    else:
-        missing_kinds = [key for key, path in out_paths.items() if not path.exists()]
-        if not missing_kinds:
-            print("All requested FC outputs already exist. Skipping computation.")
-            return 0
 
     if args.coverage_threshold <= 0 or args.coverage_threshold >= 1:
         raise ValueError("coverage_threshold must be in (0, 1)")
 
     drop_subjects = args.drop_subject if args.drop_subject is not None else ["sub-3258811"]
     subject_order = load_subject_order(input_path)
+    subject_order_full = subject_order
 
     timeseries = np.load(input_path)
 
     # Apply HCPex preprocessing if needed (before subject filtering)
     timeseries = preprocess_hcpex_if_needed(timeseries, atlas, args.data_root)
 
-    timeseries, subject_order, dropped = filter_subjects(
+    timeseries, _, dropped = filter_subjects(
         timeseries,
-        subject_order,
+        subject_order_full,
         drop_subjects,
     )
 
@@ -664,6 +812,59 @@ def main() -> int:
         print("No matching subjects found to drop.")
 
     coverage_arg = normalize_coverage_arg(args.coverage)
+    coverage_effective = coverage_arg
+    if atlas.upper() == "HCPEX":
+        if coverage_arg is not None:
+            print(
+                "HCPex atlas: timeseries are pre-masked to 373 ROIs; disabling coverage filtering."
+            )
+        coverage_effective = None
+
+    expected_subjects, expected_edges, expected_sessions = _expected_fc_shape(
+        strategy_path=input_path,
+        timeseries=timeseries,
+        coverage=coverage_effective,
+        coverage_threshold=args.coverage_threshold,
+        data_root=args.data_root,
+    )
+    expected_shape = _expected_fc_shape_tuple(expected_subjects, expected_edges, expected_sessions)
+
+    if args.overwrite:
+        missing_kinds = list(name_map.keys())
+    else:
+        missing_kinds = []
+        for key, out_path in out_paths.items():
+            if not out_path.exists():
+                missing_kinds.append(key)
+                continue
+
+            dropped_existing = _maybe_filter_fc_file_subjects(
+                out_path,
+                subject_order=subject_order_full,
+                drop_subjects=drop_subjects,
+                expected_edges=expected_edges,
+                expected_sessions=expected_sessions,
+            )
+            if dropped_existing:
+                print(
+                    f"{input_path.name}: dropped {', '.join(dropped_existing)} from existing {name_map[key]}"
+                )
+
+            existing = np.load(out_path, mmap_mode="r")
+            if not _shape_matches_expected(
+                existing.shape,
+                expected_subjects=expected_subjects,
+                expected_edges=expected_edges,
+                expected_sessions=expected_sessions,
+            ):
+                print(
+                    f"{input_path.name}: stale {name_map[key]} shape {existing.shape}, expected {expected_shape}; recomputing."
+                )
+                missing_kinds.append(key)
+
+        if not missing_kinds:
+            print("All requested FC outputs already exist with expected shapes. Skipping computation.")
+            return 0
 
     if "glasso" in missing_kinds:
         precomputed_dir = glasso_search_dir(glasso_root, site="china", atlas=atlas)
@@ -672,38 +873,32 @@ def main() -> int:
             print(f"Glasso not found for {input_path.stem} in {precomputed_dir}; skipping glasso.")
             missing_kinds.remove("glasso")
         else:
-            glasso_dropped = copy_precomputed_glasso(
+            allowed_subject_counts = {expected_subjects}
+            if subject_order_full is not None:
+                allowed_subject_counts.add(len(subject_order_full))
+            if not _precomputed_glasso_matches_expected(
                 precomputed,
-                out_paths["glasso"],
-                subject_order=subject_order,
-                drop_subjects=drop_subjects,
-            )
-            missing_kinds.remove("glasso")
-            if glasso_dropped:
-                print(f"{input_path.name}: dropped {', '.join(glasso_dropped)} from glasso")
-            print(f"Copied glasso: {out_paths['glasso']}")
-    elif drop_subjects:
-        existing_glasso = out_paths.get("glasso")
-        if existing_glasso is not None and existing_glasso.exists():
-            if subject_order is None:
-                raise FileNotFoundError(
-                    "Subject order file not found; cannot drop subjects without ordering."
+                expected_edges=expected_edges,
+                expected_sessions=expected_sessions,
+                allowed_subject_counts=allowed_subject_counts,
+            ):
+                pre_shape = np.load(precomputed, mmap_mode="r").shape
+                print(
+                    f"{input_path.name}: precomputed glasso shape {pre_shape} does not match expected "
+                    f"{expected_shape}; skipping glasso (recompute glasso with matching coverage)."
                 )
-            expected_keep, _ = compute_keep_indices(subject_order, drop_subjects)
-            glasso = np.load(existing_glasso)
-            if glasso.shape[0] == len(subject_order):
-                filtered, glasso_dropped = filter_precomputed_glasso(
-                    glasso, subject_order, drop_subjects
+                missing_kinds.remove("glasso")
+            else:
+                glasso_dropped = copy_precomputed_glasso(
+                    precomputed,
+                    out_paths["glasso"],
+                    subject_order=subject_order_full,
+                    drop_subjects=drop_subjects,
                 )
-                np.save(existing_glasso, filtered)
+                missing_kinds.remove("glasso")
                 if glasso_dropped:
                     print(f"{input_path.name}: dropped {', '.join(glasso_dropped)} from glasso")
-                print(f"Updated glasso: {existing_glasso}")
-            elif glasso.shape[0] != len(expected_keep):
-                raise ValueError(
-                    f"Glasso subject count {glasso.shape[0]} does not match subject order "
-                    f"({len(subject_order)}) or filtered count ({len(expected_keep)})."
-                )
+                print(f"Copied glasso: {out_paths['glasso']}")
 
     if not missing_kinds:
         return 0
@@ -715,7 +910,7 @@ def main() -> int:
             filtered_path,
             tangent_connectivity=None,
             kinds=[k for k in missing_kinds if k != "glasso"],
-            coverage=coverage_arg,
+            coverage=coverage_effective,
             coverage_threshold=args.coverage_threshold,
             data_path=args.data_root,
             print_timing=args.print_timing,

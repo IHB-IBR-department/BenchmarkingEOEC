@@ -12,7 +12,7 @@ IHB (St. Petersburg):
 
 China (Beijing):
     timeseries_china/{Atlas}/{site}_{condition}_{Atlas}_strategy-{N}_{GSR}.npy
-    Close shape: (48, 240, n_rois, 2) - 4D with 2 sessions, USE FIRST ONLY
+    Close shape: (48, 240, n_rois, 2) - 4D with 2 sessions (session 0 used in ML)
     Open shape: (48, 240, n_rois) - 3D
 
 Author: BenchmarkingEOEC Team
@@ -25,7 +25,7 @@ from typing import Literal, Optional, Union
 
 import numpy as np
 
-from benchmarking.project import resolve_data_root
+from data_utils.paths import resolve_data_root
 
 Site = Literal["china", "ihb"]
 Condition = Literal["close", "open"]
@@ -95,7 +95,7 @@ def load_timeseries(
     -------
     ts : np.ndarray
         Shape: (n_subjects, n_timepoints, n_rois)
-        For China 'close', returns first session only (index 0)
+        For China 'close', returns session 0 only (use icc_data_preparation for 2-session ICC)
     """
     filepath = timeseries_path(
         data_root=data_path,
@@ -215,9 +215,9 @@ def glasso_precomputed_path(
     strategy: Union[int, str],
     gsr: str,
 ) -> Path:
-    """Build path to a precomputed glasso file."""
+    """Build path to a precomputed glasso file (glasso_precomputed_fc/{site}/{atlas})."""
     data_root = resolve_data_root(data_root)
-    glasso_dir = data_root / "glasso_precomputed_fc"
+    glasso_dir = data_root / "glasso_precomputed_fc" / site / atlas
     filename = f"{site}_{condition}_{atlas}_strategy-{strategy}_{gsr}_glasso.npy"
     return glasso_dir / filename
 

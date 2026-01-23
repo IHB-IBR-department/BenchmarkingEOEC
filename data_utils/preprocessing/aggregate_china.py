@@ -21,9 +21,9 @@ Incomplete scans (zero-padded):
   Consider excluding this subject's close2 data from analyses.
 
 Usage:
-    python -m benchmarking.aggregate_china
-    python -m benchmarking.aggregate_china --aroma
-    python -m benchmarking.aggregate_china --exclude sub-3258811  # if needed
+    python -m data_utils.preprocessing.aggregate_china
+    python -m data_utils.preprocessing.aggregate_china --aroma
+    python -m data_utils.preprocessing.aggregate_china --exclude sub-3258811  # if needed
 """
 
 from __future__ import annotations

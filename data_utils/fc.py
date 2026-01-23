@@ -53,7 +53,7 @@ import numpy as np
 from scipy import stats
 from nilearn.connectome import ConnectivityMeasure, sym_matrix_to_vec
 
-from benchmarking.project import resolve_data_root
+from data_utils.paths import resolve_data_root
 
 # gglasso import (used for glasso instead of sklearn due to stability issues)
 try:

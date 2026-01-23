@@ -42,13 +42,13 @@ Interpretation
 Usage
 -----
     # Quick test (1 fold)
-    python tangent_leakage.py --config configs/tangent_leakage_quick.yaml
+    python -m benchmarking.ml.tangent_leakage --config configs/tangent_leakage_quick.yaml
 
     # Full experiment (3 folds)
-    python tangent_leakage.py --config configs/tangent_leakage_full.yaml
+    python -m benchmarking.ml.tangent_leakage --config configs/tangent_leakage_full.yaml
 
     # Custom parameters
-    python tangent_leakage.py --n_splits 5 --pca_components 0.95
+    python -m benchmarking.ml.tangent_leakage --n_splits 5 --pca_components 0.95
 
 Authors: Medvedeva et al., 2025
 """

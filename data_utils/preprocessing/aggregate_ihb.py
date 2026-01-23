@@ -3,16 +3,16 @@ Aggregate IHB (St. Petersburg) per-subject time series CSVs into numpy arrays.
 
 Usage:
     # Standard denoising pipelines (strategies 1-6)
-    python -m benchmarking.aggregate_ihb
+    python -m data_utils.preprocessing.aggregate_ihb
 
     # With custom paths
-    python -m benchmarking.aggregate_ihb --input-dir <path> --output-dir <path>
+    python -m data_utils.preprocessing.aggregate_ihb --input-dir <path> --output-dir <path>
 
     # Specific atlases only
-    python -m benchmarking.aggregate_ihb --atlases Schaefer200 AAL
+    python -m data_utils.preprocessing.aggregate_ihb --atlases Schaefer200 AAL
 
     # AROMA denoising pipelines
-    python -m benchmarking.aggregate_ihb --aroma
+    python -m data_utils.preprocessing.aggregate_ihb --aroma
 
 This script reads individual subject CSV files and aggregates them into
 numpy arrays with consistent subject ordering. This format is more efficient

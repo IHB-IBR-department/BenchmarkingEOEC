@@ -14,7 +14,7 @@ YAML config (top-level keys, similar to qc_fc.py):
   icc: [icc31, icc21, icc11]
   drop_subjects: [sub-3258811]
   mask: true
-  mask_percentile: 95
+  mask_percentile: 98
   save_edgewise: false
   edgewise_output_dir: "icc_results"  # writes *_edgewise_icc_all.pkl (+ *_masked.pkl when mask=true)
   output: "icc_results/icc_summary.csv"
@@ -36,7 +36,7 @@ import pandas as pd
 from tqdm import tqdm
 import yaml
 
-from benchmarking.icc_data_preparation import normalize_kinds
+from data_utils.preprocessing.icc_data_preparation import normalize_kinds
 
 
 # =============================================================================
@@ -165,7 +165,7 @@ def _safe_nanstd(values: np.ndarray) -> float:
 def compute_icc_summary(
     data: np.ndarray,
     icc_list: Iterable[str],
-    percentile: float = 95.0,
+    percentile: float = 98.0,
     mask: np.ndarray | None = None,
 ) -> dict[str, dict[str, float]]:
     if mask is None:
@@ -258,7 +258,7 @@ def run_icc_computation(
     icc_list: list[str],
     pattern: str = "*.npy",
     mask: bool = False,
-    mask_percentile: float = 95.0,
+    mask_percentile: float = 98.0,
     save_edgewise: bool = False,
     edgewise_output_dir: Path | None = None,
     allowed_atlases: list[str] | None = None,
@@ -475,7 +475,7 @@ def run_icc_from_config(config: dict[str, Any]) -> pd.DataFrame:
     drop_subjects = [str(x) for x in drop_subjects if str(x).strip()]
 
     mask = bool(config.get("mask", True))
-    mask_percentile = float(config.get("mask_percentile", 95.0))
+    mask_percentile = float(config.get("mask_percentile", 98.0))
     save_edgewise = bool(config.get("save_edgewise", False))
     edgewise_output_dir = Path(config.get("edgewise_output_dir") or "icc_results").expanduser()
     pattern = str(config.get("pattern") or "*.npy")
