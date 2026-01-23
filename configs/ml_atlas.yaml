@@ -1,0 +1,38 @@
+# Config for a full atlas run (multiple strategies)
+# Usage: python -m benchmarking.ml.pipeline --config configs/pipeline_atlas.yaml
+
+# List of strategies and atlases to run
+strategies: [1, 2, 3, 4, 5, 6, "AROMA_aggr", "AROMA_nonaggr"]
+atlases: ["AAL", "Schaefer200", "Brainnetome"]
+gsr_options: ["GSR", "noGSR"]
+
+pipeline_defaults:
+  fc_types: [corr, partial, tangent, glasso]
+  models: [logreg]
+  
+  # Glasso options
+  skip_glasso: false
+  precomputed_glasso_dir: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+  glasso_lambda: 0.03
+  
+  # Model settings
+  model_params:
+    C: 1.0
+  pca_components: 0.95
+  
+  # Execution
+  n_permutations: 100  # Higher for production runs
+  random_state: 42
+  save_test_outputs: true
+  n_workers: 4          # Parallel execution recommended
+
+data:
+  data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+  coverage_threshold: 0.1
+
+output:
+  output_dir: "results/ml"
+
+few_shot:
+  n_few_shot: 20
+  n_repeats: 5

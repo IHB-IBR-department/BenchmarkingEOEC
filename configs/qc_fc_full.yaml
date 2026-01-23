@@ -49,5 +49,5 @@ n_workers: 4
 output: "results/qcfc/qc_fc_full.csv"
 
 # Edge-wise correlations (optional)
-save_edge_correlations: false
+save_edge_correlations: true
 edge_correlations_dir: "results/qcfc/edge_correlations"

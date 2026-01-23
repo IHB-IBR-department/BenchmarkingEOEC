@@ -1,126 +1,99 @@
-#!/usr/bin/env python3
 """
 Unified ML Pipeline
 ===================
 
-Single entry point for running complete ML evaluation on a preprocessing pipeline.
+This module implements the unified machine learning pipeline for cross-site
+fMRI classification. It handles:
+1. Time series loading (IHB + China)
+2. Leakage-safe FC computation (Tangent reference fitted on train only)
+3. Direct cross-site validation (both directions)
+4. Few-shot domain adaptation
+5. Statistical testing (Permutation tests vs chance)
+6. Results aggregation and saving
 
-For a given configuration (atlas, strategy, gsr), runs:
-1. Cross-site validation: China → IHB
-2. Cross-site validation: IHB → China
-3. Few-shot domain adaptation (N repeats)
-
-All with leakage-safe tangent computation and consistent IHB coverage masking.
-All FC data is VECTORIZED throughout the pipeline.
-
-Usage
------
-    # Run with precomputed glasso (Schaefer200, strategy-1, GSR)
-    python -m benchmarking.ml.pipeline --atlas Schaefer200 --strategy 1 --gsr GSR \\
-        --precomputed-glasso ~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/glasso_precomputed_fc
-
-    # Skip glasso (faster)
-    python -m benchmarking.ml.pipeline --atlas Schaefer200 --strategy 1 --gsr GSR --skip-glasso
-
-Author: BenchmarkingEOEC Team
+Usage:
+    python -m benchmarking.ml.pipeline --atlas AAL --strategy 1 --gsr GSR
 """
 
 from __future__ import annotations
 
 import argparse
-import warnings
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional, List, Any
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from data_utils.timeseries import (
-    load_site_timeseries,
+    load_timeseries,
     load_ihb_coverage_mask,
-    load_site_precomputed_glasso,
+    load_precomputed_glasso,
+    check_precomputed_glasso_available,
 )
-from data_utils.fc import compute_fc_vectorized, get_fc_types_to_compute
+from data_utils.fc import compute_fc_train_test
 from benchmarking.ml.stats import run_classification_with_permutation
 
-
-# =============================================================================
-# Configuration and Results Dataclasses
-# =============================================================================
 
 @dataclass
 class PipelineConfig:
     """Configuration for a single preprocessing pipeline."""
-
-    atlas: str  # 'Schaefer200', 'AAL', 'Brainnetome', 'HCPex'
-    strategy: Union[int, str]  # 1-6, 'AROMA_aggr', 'AROMA_nonaggr'
-    gsr: str  # 'GSR' or 'noGSR'
-    fc_types: Optional[List[str]] = None  # ['corr', 'partial', 'tangent', 'glasso']
+    atlas: str
+    strategy: int | str
+    gsr: str
+    fc_types: list[str] = field(default_factory=lambda: ['corr', 'partial', 'tangent', 'glasso'])
+    models: list[str] = field(default_factory=lambda: ['logreg'])
 
     # Glasso options
     skip_glasso: bool = False
-    precomputed_glasso_dir: Optional[str] = None
+    precomputed_glasso_dir: str | None = None
     glasso_lambda: float = 0.03
 
     # Few-shot settings
-    n_few_shot: int = 10  # Number of IHB subjects for few-shot training
-    n_repeats: int = 10  # Number of random splits
+    n_few_shot: int = 10
+    n_repeats: int = 10
 
     # Model settings
-    model: str = "logreg"
-    model_params: Optional[Dict[str, Any]] = None
+    model_params: dict = field(default_factory=dict)
     pca_components: float = 0.95
 
     # Coverage
     coverage_threshold: float = 0.1
 
     # Paths
-    data_path: Optional[str] = None
-    output_dir: Optional[str] = None
+    data_path: str | None = None
+    output_dir: str = 'results/pipelines'
 
     # Execution
-    n_permutations: int = 0  # 0 = skip permutation test
+    n_permutations: int = 0
     random_state: int = 42
     save_test_outputs: bool = True
-
-    def __post_init__(self):
-        if self.fc_types is None:
-            self.fc_types = ["corr", "partial", "tangent", "glasso"]
+    n_workers: int = 1
+    scale: bool = True
 
 
 @dataclass
 class PipelineResults:
     """Results from running the full pipeline."""
-
     config: PipelineConfig
+    cross_site_china2ihb: pd.DataFrame
+    cross_site_ihb2china: pd.DataFrame
+    cross_site_china2ihb_outputs: pd.DataFrame
+    cross_site_ihb2china_outputs: pd.DataFrame
+    few_shot: pd.DataFrame
+    few_shot_summary: pd.DataFrame
+    summary: pd.DataFrame
 
-    # Cross-site results (both directions)
-    cross_site_china2ihb: pd.DataFrame = field(default_factory=pd.DataFrame)
-    cross_site_ihb2china: pd.DataFrame = field(default_factory=pd.DataFrame)
-    cross_site_china2ihb_outputs: pd.DataFrame = field(default_factory=pd.DataFrame)
-    cross_site_ihb2china_outputs: pd.DataFrame = field(default_factory=pd.DataFrame)
-
-    # Few-shot results
-    few_shot: pd.DataFrame = field(default_factory=pd.DataFrame)
-
-    # Combined summary
-    summary: pd.DataFrame = field(default_factory=pd.DataFrame)
-
-
-# =============================================================================
-# Few-Shot Split Generation
-# =============================================================================
 
 def generate_few_shot_splits(
     n_subjects: int,
     n_few_shot: int,
     n_repeats: int,
     random_state: int = 42,
-) -> List[Dict[str, Any]]:
-    """
-    Pre-generate random splits ONCE for fair comparison across FC types.
-    """
+) -> list[dict]:
+    """Pre-generate random splits for few-shot learning."""
     rng = np.random.RandomState(random_state)
     all_subjects = np.arange(n_subjects)
 
@@ -128,460 +101,397 @@ def generate_few_shot_splits(
     for repeat in range(n_repeats):
         shuffled = rng.permutation(all_subjects)
         splits.append({
-            "repeat": repeat,
-            "train_subjects": shuffled[:n_few_shot],
-            "test_subjects": shuffled[n_few_shot:],
+            'repeat': repeat,
+            'train_subjects': shuffled[:n_few_shot],
+            'test_subjects': shuffled[n_few_shot:]
         })
     return splits
 
 
-def subjects_to_mask(subjects: np.ndarray, n_subjects: int) -> np.ndarray:
-    """
-    Convert subject indices to a boolean mask for samples.
+def _subjects_to_indices(subject_indices: np.ndarray, samples_per_subject: int) -> np.ndarray:
+    """Convert subject indices to sample indices (assuming sequential block layout)."""
+    # If samples_per_subject = 2, subject 0 -> [0, 1], subject 1 -> [2, 3]
+    indices = []
+    for subj in subject_indices:
+        for i in range(samples_per_subject):
+            indices.append(subj * samples_per_subject + i)
+    return np.array(indices)
 
-    Data is ordered as [EC_all, EO_all], so:
-    - samples 0..n_subjects-1 are EC for subjects 0..n_subjects-1
-    - samples n_subjects..2*n_subjects-1 are EO for subjects 0..n_subjects-1
-
-    Subject i has samples at indices i (EC) and i+n_subjects (EO).
-    """
-    n_samples = n_subjects * 2
-    mask = np.zeros(n_samples, dtype=bool)
-    for subj in subjects:
-        mask[subj] = True  # EC sample
-        mask[subj + n_subjects] = True  # EO sample
-    return mask
-
-
-# =============================================================================
-# Main Pipeline Function
-# =============================================================================
 
 def run_full_pipeline(config: PipelineConfig) -> PipelineResults:
-    """
-    Run complete ML evaluation for a single preprocessing pipeline.
-
-    All FC is computed as VECTORIZED data (n_samples, n_edges).
-    """
-    print(f"\n{'='*60}")
-    print(f"Running pipeline: {config.atlas}_strategy-{config.strategy}_{config.gsr}")
-    print(f"{'='*60}")
-
-    # =========================================================================
+    """Run complete ML evaluation for one preprocessing configuration."""
+    
     # 1. Load Timeseries Data
-    # =========================================================================
-    print("\n[1/4] Loading timeseries data...")
+    print(f"Loading timeseries for {config.atlas} strategy-{config.strategy} {config.gsr}...")
+    
+    # IHB: close + open
+    ihb_close = load_timeseries('ihb', 'close', config.atlas, config.strategy, config.gsr, config.data_path)
+    ihb_open = load_timeseries('ihb', 'open', config.atlas, config.strategy, config.gsr, config.data_path)
+    ihb_ts = np.concatenate([ihb_close, ihb_open], axis=0)
+    # IHB Labels: first half close (0), second half open (1)
+    ihb_n_sub = len(ihb_close)
+    ihb_y = np.array([0] * ihb_n_sub + [1] * ihb_n_sub)
+    
+    # China: close (session 0) + open
+    china_close = load_timeseries('china', 'close', config.atlas, config.strategy, config.gsr, config.data_path)
+    china_open = load_timeseries('china', 'open', config.atlas, config.strategy, config.gsr, config.data_path)
+    china_ts = np.concatenate([china_close, china_open], axis=0)
+    # China Labels
+    china_n_sub = len(china_close)
+    china_y = np.array([0] * china_n_sub + [1] * china_n_sub)
 
-    # Load IHB coverage mask (used for both sites)
-    coverage_mask = load_ihb_coverage_mask(
-        atlas=config.atlas,
-        data_path=config.data_path,
-        threshold=config.coverage_threshold,
-    )
-    n_good_rois = int(np.sum(coverage_mask))
-    n_edges = n_good_rois * (n_good_rois - 1) // 2
-    print(f"  Coverage mask: {n_good_rois}/{len(coverage_mask)} good ROIs → {n_edges} edges")
+    # Load Coverage Mask (IHB)
+    coverage_mask = load_ihb_coverage_mask(config.atlas, config.data_path, config.coverage_threshold)
 
-    # Load timeseries for both sites
-    china_ts, china_y = load_site_timeseries(
-        "china", config.atlas, config.strategy, config.gsr, config.data_path
-    )
-    ihb_ts, ihb_y = load_site_timeseries(
-        "ihb", config.atlas, config.strategy, config.gsr, config.data_path
-    )
-
-    n_china_subjects = china_ts.shape[0] // 2
-    n_ihb_subjects = ihb_ts.shape[0] // 2
-    print(f"  China: {china_ts.shape[0]} samples ({n_china_subjects} subjects), {china_ts.shape[1]} TRs")
-    print(f"  IHB: {ihb_ts.shape[0]} samples ({n_ihb_subjects} subjects), {ihb_ts.shape[1]} TRs")
-
-    # =========================================================================
-    # 2. Determine FC types and load precomputed glasso if available
-    # =========================================================================
-    print("\n[2/4] Preparing FC computation...")
-
-    fc_types = get_fc_types_to_compute(config.fc_types, config.skip_glasso)
-    print(f"  FC types: {fc_types}")
-
-    # Load precomputed glasso if available and needed
-    precomputed_glasso = {}
-    if "glasso" in fc_types and config.precomputed_glasso_dir:
-        print(f"  Loading precomputed glasso...")
+    # 2. Handle Glasso Loading (if needed)
+    glasso_ihb = None
+    glasso_china = None
+    
+    fc_types = config.fc_types[:]
+    if config.skip_glasso and 'glasso' in fc_types:
+        fc_types.remove('glasso')
+    
+    if 'glasso' in fc_types and config.precomputed_glasso_dir:
         try:
-            precomputed_glasso["china"] = load_site_precomputed_glasso(
-                "china", config.atlas, config.strategy, config.gsr, config.data_path
-            )
-            precomputed_glasso["ihb"] = load_site_precomputed_glasso(
-                "ihb", config.atlas, config.strategy, config.gsr, config.data_path
-            )
-            print(f"    china: {precomputed_glasso['china'].shape}, ihb: {precomputed_glasso['ihb'].shape}")
+            print("Loading precomputed glasso...")
+            # Load IHB
+            g_ihb_c = load_precomputed_glasso('ihb', 'close', config.atlas, config.strategy, config.gsr, config.precomputed_glasso_dir)
+            g_ihb_o = load_precomputed_glasso('ihb', 'open', config.atlas, config.strategy, config.gsr, config.precomputed_glasso_dir)
+            glasso_ihb = np.concatenate([g_ihb_c, g_ihb_o], axis=0)
+            
+            # Load China
+            g_china_c = load_precomputed_glasso('china', 'close', config.atlas, config.strategy, config.gsr, config.precomputed_glasso_dir)
+            g_china_o = load_precomputed_glasso('china', 'open', config.atlas, config.strategy, config.gsr, config.precomputed_glasso_dir)
+            glasso_china = np.concatenate([g_china_c, g_china_o], axis=0)
         except FileNotFoundError as e:
-            warnings.warn(f"Precomputed glasso not found: {e}. Will compute on-the-fly (slow!).")
-            precomputed_glasso = {}
-    elif "glasso" in fc_types:
-        print("  WARNING: glasso will be computed on-the-fly (slow!)")
+            print(f"Warning: Precomputed glasso not found ({e}). Skipping glasso.")
+            if 'glasso' in fc_types:
+                fc_types.remove('glasso')
 
-    # =========================================================================
-    # 3. Run Cross-Site Validation (Both Directions)
-    # =========================================================================
-    print("\n[3/4] Running cross-site validation...")
-
+    # 3. Cross-Site Validation
+    print("Running cross-site validation...")
     cross_site_results = {}
 
-    directions = [
-        ("china2ihb", china_ts, china_y, ihb_ts, ihb_y, "china", "ihb"),
-        ("ihb2china", ihb_ts, ihb_y, china_ts, china_y, "ihb", "china"),
-    ]
+    for direction in ['china2ihb', 'ihb2china']:
+        if direction == 'china2ihb':
+            ts_train, y_train = china_ts, china_y
+            ts_test, y_test = ihb_ts, ihb_y
+            g_train, g_test = glasso_china, glasso_ihb
+        else:
+            ts_train, y_train = ihb_ts, ihb_y
+            ts_test, y_test = china_ts, china_y
+            g_train, g_test = glasso_ihb, glasso_china
 
-    for direction, ts_train, y_train, ts_test, y_test, train_site, test_site in directions:
-        print(f"\n  Direction: {direction}")
         results_rows = []
         output_rows = []
 
-        for fc_type in fc_types:
-            print(f"    FC type: {fc_type}...", end=" ", flush=True)
+        # Compute all FC types
+        fc_data = compute_fc_train_test(
+            ts_train, ts_test,
+            kinds=fc_types,
+            coverage_mask=coverage_mask,
+            glasso_train=g_train,
+            glasso_test=g_test,
+            glasso_lambda=config.glasso_lambda,
+        )
 
-            try:
-                # Handle glasso separately (precomputed or compute)
-                if fc_type == "glasso" and precomputed_glasso:
-                    X_train = precomputed_glasso[train_site]
-                    X_test = precomputed_glasso[test_site]
-                else:
-                    # Compute FC for train site (fit tangent reference)
-                    X_train, tangent_transformer = compute_fc_vectorized(
-                        ts_train,
-                        fc_type=fc_type,
-                        coverage_mask=coverage_mask,
-                        glasso_lambda=config.glasso_lambda,
-                        tangent_transformer=None,
-                    )
-
-                    # Compute FC for test site (use train's tangent reference)
-                    X_test, _ = compute_fc_vectorized(
-                        ts_test,
-                        fc_type=fc_type,
-                        coverage_mask=coverage_mask,
-                        glasso_lambda=config.glasso_lambda,
-                        tangent_transformer=tangent_transformer,
-                    )
-
-                # Run classification (data is already vectorized)
-                clf_result = run_classification_with_permutation(
+        for fc_type, (X_train, X_test) in fc_data.items():
+            for model_name in config.models:
+                clf_res = run_classification_with_permutation(
                     X_train, y_train, X_test, y_test,
                     pca_components=config.pca_components,
                     random_state=config.random_state,
                     n_permutations=config.n_permutations,
-                    model=config.model,
+                    model=model_name,
                     model_params=config.model_params,
+                    scale=config.scale,
                     return_test_outputs=config.save_test_outputs,
-                    vectorize=False,  # Already vectorized!
+                    vectorize=False, # Already vectorized by compute_fc_train_test
                 )
 
-                print(f"acc={clf_result['test_acc']:.3f}, auc={clf_result.get('test_auc', 'N/A')}")
+                # Metadata
+                row = {
+                    'direction': direction,
+                    'atlas': config.atlas,
+                    'fc_type': fc_type,
+                    'strategy': config.strategy,
+                    'gsr': config.gsr,
+                    'n_train': len(y_train),
+                    'n_test': len(y_test),
+                    'model': model_name,
+                    'model_params': json.dumps(config.model_params, sort_keys=True),
+                }
+                # Extract scalar metrics
+                for k, v in clf_res.items():
+                    if k not in ['test_y_pred', 'test_score', 'test_p_positive', 'model', 'model_params']:
+                        row[k] = v
+                results_rows.append(row)
 
-                # Collect results
-                results_rows.append({
-                    "direction": direction,
-                    "train_site": train_site,
-                    "test_site": test_site,
-                    "atlas": config.atlas,
-                    "fc_type": fc_type,
-                    "strategy": config.strategy,
-                    "gsr": config.gsr,
-                    "n_train": len(y_train),
-                    "n_test": len(y_test),
-                    "train_acc": clf_result.get("train_acc"),
-                    "test_acc": clf_result.get("test_acc"),
-                    "train_auc": clf_result.get("train_auc"),
-                    "test_auc": clf_result.get("test_auc"),
-                    "train_brier": clf_result.get("train_brier"),
-                    "test_brier": clf_result.get("test_brier"),
-                    "n_pca_components": clf_result.get("n_pca_components"),
-                    "p_value": clf_result.get("p_value"),
-                })
-
-                # Collect per-sample outputs
-                if config.save_test_outputs and "test_y_pred" in clf_result:
-                    test_y_pred = clf_result["test_y_pred"]
-                    test_score = clf_result.get("test_score") or [None] * len(y_test)
-                    test_p_positive = clf_result.get("test_p_positive") or [None] * len(y_test)
-
-                    n_test_subjects = len(y_test) // 2
-                    for i in range(len(y_test)):
-                        test_subject = i if i < n_test_subjects else i - n_test_subjects
+                # Extract per-sample outputs
+                if config.save_test_outputs and 'test_y_pred' in clf_res:
+                    n_samples = len(y_test)
+                    n_sub_test = n_samples // 2
+                    test_subjects = np.concatenate([np.arange(n_sub_test), np.arange(n_sub_test)])
+                    
+                    for i in range(n_samples):
                         output_rows.append({
-                            "direction": direction,
-                            "train_site": train_site,
-                            "test_site": test_site,
-                            "fc_type": fc_type,
-                            "sample_index": i,
-                            "test_subject": test_subject,
-                            "y_true": int(y_test[i]),
-                            "y_pred": int(test_y_pred[i]),
-                            "y_score": test_score[i] if test_score else None,
-                            "p_positive": test_p_positive[i] if test_p_positive else None,
+                            'direction': direction,
+                            'atlas': config.atlas,
+                            'fc_type': fc_type,
+                            'strategy': config.strategy,
+                            'gsr': config.gsr,
+                            'model': model_name,
+                            'model_params': json.dumps(config.model_params, sort_keys=True),
+                            'train_site': 'china' if direction == 'china2ihb' else 'ihb',
+                            'test_site': 'ihb' if direction == 'china2ihb' else 'china',
+                            'sample_index': i,
+                            'test_subject': test_subjects[i],
+                            'condition': 'close' if i < n_sub_test else 'open',
+                            'y_true': int(y_test[i]),
+                            'y_pred': int(clf_res['test_y_pred'][i]),
+                            'y_score': clf_res['test_score'][i] if clf_res['test_score'] is not None else None,
+                            'p_positive': clf_res['test_p_positive'][i] if clf_res['test_p_positive'] is not None else None,
                         })
 
-            except Exception as e:
-                print(f"FAILED: {e}")
-                results_rows.append({
-                    "direction": direction,
-                    "train_site": train_site,
-                    "test_site": test_site,
-                    "atlas": config.atlas,
-                    "fc_type": fc_type,
-                    "strategy": config.strategy,
-                    "gsr": config.gsr,
-                    "error": str(e),
-                })
-
         cross_site_results[direction] = {
-            "results": pd.DataFrame(results_rows),
-            "outputs": pd.DataFrame(output_rows) if output_rows else pd.DataFrame(),
+            'results': pd.DataFrame(results_rows),
+            'outputs': pd.DataFrame(output_rows)
         }
 
-    # =========================================================================
-    # 4. Run Few-Shot Domain Adaptation
-    # =========================================================================
-    print("\n[4/4] Running few-shot validation...")
-
-    # Generate splits ONCE (critical for fair comparison)
-    splits = generate_few_shot_splits(
-        n_subjects=n_ihb_subjects,
-        n_few_shot=config.n_few_shot,
-        n_repeats=config.n_repeats,
-        random_state=config.random_state,
-    )
-    print(f"  Generated {len(splits)} splits ({config.n_few_shot} few-shot subjects each)")
-
+    # 4. Few-Shot Domain Adaptation (Train: China + k IHB, Test: remaining IHB)
+    print(f"Running few-shot ({config.n_few_shot} subjects, {config.n_repeats} repeats)...")
+    
+    splits = generate_few_shot_splits(ihb_n_sub, config.n_few_shot, config.n_repeats, config.random_state)
     few_shot_rows = []
 
-    for fc_type in fc_types:
-        print(f"  FC type: {fc_type}...", end=" ", flush=True)
+    # Prepare IHB data specifically for splitting
+    # Note: ihb_ts is [Close(0..N), Open(0..N)]. 
+    # We need to pick both Close and Open for training subjects.
+    
+    for split in tqdm(splits, desc="Few-shot repeats"):
+        # Map subject indices to sample indices
+        # Samples 0..83 are Close, 84..167 are Open (for 84 subjects)
+        # Train indices: subject i -> samples i AND i + n_sub
+        train_sub_idx = split['train_subjects']
+        test_sub_idx = split['test_subjects']
+        
+        train_indices = np.concatenate([train_sub_idx, train_sub_idx + ihb_n_sub])
+        test_indices = np.concatenate([test_sub_idx, test_sub_idx + ihb_n_sub])
+        
+        # Build training set: All China + Few-shot IHB
+        # Note: China and IHB have different TRs (240 vs 120), so we cannot concat raw arrays.
+        # We must create a list of arrays for ComputeFC
+        
+        # China part (convert to list of arrays)
+        ts_train_list = list(china_ts)
+        
+        # IHB part (append selected subjects)
+        ihb_train_subset = ihb_ts[train_indices]
+        ts_train_list.extend(list(ihb_train_subset))
+        
+        y_train_fs = np.concatenate([china_y, ihb_y[train_indices]], axis=0)
+        
+        # Test set: Remaining IHB
+        ts_test_fs = ihb_ts[test_indices]
+        y_test_fs = ihb_y[test_indices]
+        
+        # Handle Glasso slicing
+        g_train_fs, g_test_fs = None, None
+        if glasso_ihb is not None and glasso_china is not None:
+            g_train_fs = np.concatenate([glasso_china, glasso_ihb[train_indices]], axis=0)
+            g_test_fs = glasso_ihb[test_indices]
 
-        try:
-            # Compute FC for China (always in train) - fit tangent reference
-            if fc_type == "glasso" and precomputed_glasso:
-                china_fc = precomputed_glasso["china"]
-                ihb_fc = precomputed_glasso["ihb"]
-                tangent_transformer = None
-            else:
-                china_fc, tangent_transformer = compute_fc_vectorized(
-                    china_ts,
-                    fc_type=fc_type,
-                    coverage_mask=coverage_mask,
-                    glasso_lambda=config.glasso_lambda,
-                    tangent_transformer=None,
-                )
+        # Compute FC
+        fc_data = compute_fc_train_test(
+            ts_train_list, ts_test_fs,
+            kinds=fc_types,
+            coverage_mask=coverage_mask,
+            glasso_train=g_train_fs,
+            glasso_test=g_test_fs,
+            glasso_lambda=config.glasso_lambda,
+        )
 
-                # Compute FC for IHB using China's tangent reference
-                ihb_fc, _ = compute_fc_vectorized(
-                    ihb_ts,
-                    fc_type=fc_type,
-                    coverage_mask=coverage_mask,
-                    glasso_lambda=config.glasso_lambda,
-                    tangent_transformer=tangent_transformer,
-                )
-
-            # Run all repeats with same FC
-            accs = []
-            for split in splits:
-                train_mask = subjects_to_mask(split["train_subjects"], n_ihb_subjects)
-                test_mask = subjects_to_mask(split["test_subjects"], n_ihb_subjects)
-
-                # Concatenate vectorized FC: China + few-shot IHB
-                X_train = np.concatenate([china_fc, ihb_fc[train_mask]], axis=0)
-                y_train = np.concatenate([china_y, ihb_y[train_mask]], axis=0)
-
-                X_test = ihb_fc[test_mask]
-                y_test = ihb_y[test_mask]
-
-                # Run classification
-                clf_result = run_classification_with_permutation(
-                    X_train, y_train, X_test, y_test,
+        for fc_type, (X_train, X_test) in fc_data.items():
+            for model_name in config.models:
+                # Skip permutation for few-shot to save time
+                clf_res = run_classification_with_permutation(
+                    X_train, y_train_fs, X_test, y_test_fs,
                     pca_components=config.pca_components,
                     random_state=config.random_state,
                     n_permutations=0,
-                    model=config.model,
+                    model=model_name,
                     model_params=config.model_params,
-                    vectorize=False,  # Already vectorized!
+                    scale=config.scale,
+                    vectorize=False,
                 )
-
-                accs.append(clf_result.get("test_acc", 0))
-
-                few_shot_rows.append({
-                    "repeat": split["repeat"],
-                    "fc_type": fc_type,
-                    "atlas": config.atlas,
-                    "strategy": config.strategy,
-                    "gsr": config.gsr,
-                    "n_train": len(y_train),
-                    "n_test": len(y_test),
-                    "n_china": len(china_y),
-                    "n_ihb_fewshot": int(train_mask.sum()),
-                    "train_acc": clf_result.get("train_acc"),
-                    "test_acc": clf_result.get("test_acc"),
-                    "train_auc": clf_result.get("train_auc"),
-                    "test_auc": clf_result.get("test_auc"),
-                    "train_brier": clf_result.get("train_brier"),
-                    "test_brier": clf_result.get("test_brier"),
-                    "n_pca_components": clf_result.get("n_pca_components"),
-                })
-
-            print(f"acc={np.mean(accs):.3f} ± {np.std(accs):.3f}")
-
-        except Exception as e:
-            print(f"FAILED: {e}")
-            for split in splits:
-                few_shot_rows.append({
-                    "repeat": split["repeat"],
-                    "fc_type": fc_type,
-                    "atlas": config.atlas,
-                    "strategy": config.strategy,
-                    "gsr": config.gsr,
-                    "error": str(e),
-                })
+                
+                row = {
+                    'repeat': split['repeat'],
+                    'fc_type': fc_type,
+                    'model': model_name,
+                    'atlas': config.atlas,
+                    'strategy': config.strategy,
+                    'gsr': config.gsr,
+                    'n_train': len(y_train_fs),
+                    'n_test': len(y_test_fs),
+                    'n_china': len(china_y),
+                    'n_ihb_fewshot': len(train_indices),
+                }
+                for k, v in clf_res.items():
+                    if k not in ['test_y_pred', 'test_score', 'test_p_positive', 'model', 'model_params']:
+                        row[k] = v
+                few_shot_rows.append(row)
 
     few_shot_df = pd.DataFrame(few_shot_rows)
+    
+    # Aggregate few-shot summary
+    if not few_shot_df.empty:
+        few_shot_summary = few_shot_df.groupby(['fc_type', 'model']).agg({
+            'test_acc': ['mean', 'std'],
+            'test_auc': ['mean', 'std'],
+            'test_brier': ['mean', 'std'],
+        }).round(4)
+        # Flatten columns
+        few_shot_summary.columns = [f"few_shot_{c[0]}_{c[1]}" for c in few_shot_summary.columns]
+        few_shot_summary = few_shot_summary.reset_index()
+    else:
+        few_shot_summary = pd.DataFrame()
 
-    # =========================================================================
     # 5. Create Combined Summary
-    # =========================================================================
     summary_rows = []
     for fc_type in fc_types:
-        row = {
-            "atlas": config.atlas,
-            "strategy": config.strategy,
-            "gsr": config.gsr,
-            "fc_type": fc_type,
-        }
+        for model_name in config.models:
+            row = {
+                'atlas': config.atlas,
+                'strategy': config.strategy,
+                'gsr': config.gsr,
+                'fc_type': fc_type,
+                'model': model_name,
+            }
+            
+            # Cross-site
+            for d in ['china2ihb', 'ihb2china']:
+                df = cross_site_results[d]['results']
+                if not df.empty:
+                    fc_row = df[(df['fc_type'] == fc_type) & (df['model'] == model_name)]
+                    if not fc_row.empty:
+                        rec = fc_row.iloc[0]
+                        row[f'{d}_acc'] = rec.get('test_acc')
+                        row[f'{d}_auc'] = rec.get('test_auc')
+                        row[f'{d}_pval'] = rec.get('p_value')
 
-        # Cross-site metrics
-        for direction in ["china2ihb", "ihb2china"]:
-            df = cross_site_results[direction]["results"]
-            fc_row = df[df["fc_type"] == fc_type]
-            if not fc_row.empty and "test_acc" in fc_row.columns:
-                row[f"{direction}_acc"] = fc_row.iloc[0].get("test_acc")
-                row[f"{direction}_auc"] = fc_row.iloc[0].get("test_auc")
+            # Few-shot
+            if not few_shot_summary.empty:
+                fs_row = few_shot_summary[(few_shot_summary['fc_type'] == fc_type) & (few_shot_summary['model'] == model_name)]
+                if not fs_row.empty:
+                    rec = fs_row.iloc[0]
+                    row['few_shot_acc_mean'] = rec.get('few_shot_test_acc_mean')
+                    row['few_shot_acc_std'] = rec.get('few_shot_test_acc_std')
+                    row['few_shot_auc_mean'] = rec.get('few_shot_test_auc_mean')
 
-        # Few-shot metrics
-        fs_fc = few_shot_df[few_shot_df["fc_type"] == fc_type]
-        if not fs_fc.empty and "test_acc" in fs_fc.columns:
-            valid_acc = fs_fc["test_acc"].dropna()
-            if len(valid_acc) > 0:
-                row["few_shot_acc_mean"] = valid_acc.mean()
-                row["few_shot_acc_std"] = valid_acc.std()
-                if "test_auc" in fs_fc.columns:
-                    valid_auc = fs_fc["test_auc"].dropna()
-                    if len(valid_auc) > 0:
-                        row["few_shot_auc_mean"] = valid_auc.mean()
-
-        summary_rows.append(row)
-
+            summary_rows.append(row)
+    
     summary_df = pd.DataFrame(summary_rows)
 
-    # =========================================================================
     # 6. Save Results
-    # =========================================================================
     if config.output_dir:
-        output_dir = Path(config.output_dir)
-        pipeline_dir = output_dir / f"{config.atlas}_strategy-{config.strategy}_{config.gsr}"
+        output_path = Path(config.output_dir)
+        pipeline_dir = output_path / f"{config.atlas}_strategy-{config.strategy}_{config.gsr}"
         pipeline_dir.mkdir(parents=True, exist_ok=True)
-
-        # Cross-site results
-        for direction in ["china2ihb", "ihb2china"]:
-            cross_site_results[direction]["results"].to_csv(
-                pipeline_dir / f"cross_site_{direction}_results.csv", index=False
-            )
-            if not cross_site_results[direction]["outputs"].empty:
-                cross_site_results[direction]["outputs"].to_csv(
-                    pipeline_dir / f"cross_site_{direction}_test_outputs.csv", index=False
-                )
-
-        # Few-shot results
+        
+        cross_site_results['china2ihb']['results'].to_csv(pipeline_dir / "cross_site_china2ihb_results.csv", index=False)
+        cross_site_results['china2ihb']['outputs'].to_csv(pipeline_dir / "cross_site_china2ihb_test_outputs.csv", index=False)
+        
+        cross_site_results['ihb2china']['results'].to_csv(pipeline_dir / "cross_site_ihb2china_results.csv", index=False)
+        cross_site_results['ihb2china']['outputs'].to_csv(pipeline_dir / "cross_site_ihb2china_test_outputs.csv", index=False)
+        
         few_shot_df.to_csv(pipeline_dir / "few_shot_results.csv", index=False)
-
-        # Summary
         summary_df.to_csv(pipeline_dir / "summary.csv", index=False)
-
-        print(f"\nResults saved to: {pipeline_dir}")
-
-    # Print summary
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    print(summary_df.to_string(index=False))
+        
+        print(f"Results saved to: {pipeline_dir}")
 
     return PipelineResults(
         config=config,
-        cross_site_china2ihb=cross_site_results["china2ihb"]["results"],
-        cross_site_ihb2china=cross_site_results["ihb2china"]["results"],
-        cross_site_china2ihb_outputs=cross_site_results["china2ihb"]["outputs"],
-        cross_site_ihb2china_outputs=cross_site_results["ihb2china"]["outputs"],
+        cross_site_china2ihb=cross_site_results['china2ihb']['results'],
+        cross_site_ihb2china=cross_site_results['ihb2china']['results'],
+        cross_site_china2ihb_outputs=cross_site_results['china2ihb']['outputs'],
+        cross_site_ihb2china_outputs=cross_site_results['ihb2china']['outputs'],
         few_shot=few_shot_df,
+        few_shot_summary=few_shot_summary,
         summary=summary_df,
     )
 
 
-# =============================================================================
-# CLI Interface
-# =============================================================================
+import yaml
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run full ML pipeline for a single preprocessing configuration",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--atlas", required=True,
-        choices=["AAL", "Schaefer200", "Brainnetome", "HCPex"],
-    )
-    parser.add_argument(
-        "--strategy", required=True,
-        help="Denoising strategy (1-6, AROMA_aggr, AROMA_nonaggr)",
-    )
-    parser.add_argument(
-        "--gsr", required=True, choices=["GSR", "noGSR"],
-    )
-    parser.add_argument(
-        "--fc-types", nargs="+", default=["corr", "partial", "tangent", "glasso"],
-    )
-    parser.add_argument("--skip-glasso", action="store_true")
-    parser.add_argument("--precomputed-glasso", type=str, default=None)
-    parser.add_argument("--data-path", type=str, default=None)
-    parser.add_argument("--output-dir", type=str, default="results/pipelines")
-    parser.add_argument("--n-few-shot", type=int, default=10)
-    parser.add_argument("--n-repeats", type=int, default=10)
-    parser.add_argument("--n-permutations", type=int, default=0)
-    parser.add_argument("--pca-components", type=float, default=0.95)
-    parser.add_argument("--random-state", type=int, default=42)
-
+    parser = argparse.ArgumentParser(description='Unified ML Pipeline for EOEC Benchmarking')
+    parser.add_argument('--config', type=str, help='Path to YAML config file')
+    
+    # CLI args (override config if provided)
+    parser.add_argument('--atlas', help='Atlas name')
+    parser.add_argument('--strategy', help='Denoising strategy')
+    parser.add_argument('--gsr', choices=['GSR', 'noGSR'])
+    parser.add_argument('--fc-types', nargs='+', help='FC types (e.g. corr partial)')
+    
+    parser.add_argument('--skip-glasso', action='store_true', help='Skip glasso computation')
+    parser.add_argument('--precomputed-glasso', type=str, help='Path to precomputed glasso dir')
+    
+    parser.add_argument('--models', nargs='+', help='List of models (e.g. logreg svm_rbf)')
+    parser.add_argument('--n-permutations', type=int, help='Number of permutations for significance testing')
+    
+    parser.add_argument('--data-path', type=str, help='Data root directory')
+    parser.add_argument('--output-dir', type=str, help='Output directory')
+    parser.add_argument('--no-scale', action='store_true', help='Disable StandardScaler')
+    
     args = parser.parse_args()
 
-    try:
-        strategy = int(args.strategy)
-    except ValueError:
-        strategy = args.strategy
+    # Load config from YAML if provided
+    config_dict = {}
+    if args.config:
+        with open(args.config) as f:
+            config_dict = yaml.safe_load(f)
 
-    config = PipelineConfig(
-        atlas=args.atlas,
-        strategy=strategy,
-        gsr=args.gsr,
-        fc_types=args.fc_types,
-        skip_glasso=args.skip_glasso,
-        precomputed_glasso_dir=args.precomputed_glasso,
-        data_path=args.data_path,
-        output_dir=args.output_dir,
-        n_few_shot=args.n_few_shot,
-        n_repeats=args.n_repeats,
-        n_permutations=args.n_permutations,
-        pca_components=args.pca_components,
-        random_state=args.random_state,
+    # Helper to resolve value from args > config > default
+    def get_val(arg_val, config_key, default=None):
+        if arg_val is not None and arg_val is not False: # Explicit CLI arg (excluding False for store_true)
+             return arg_val
+        
+        # Traverse config dict
+        keys = config_key.split('.')
+        val = config_dict
+        try:
+            for k in keys:
+                val = val[k]
+            return val
+        except (KeyError, TypeError):
+            return default
+
+    def to_list(val):
+        if val is None: return []
+        return [val] if isinstance(val, str) else list(val)
+
+    # Single run
+    cfg = PipelineConfig(
+        atlas=get_val(args.atlas, 'pipeline.atlas'),
+        strategy=get_val(args.strategy, 'pipeline.strategy'),
+        gsr=get_val(args.gsr, 'pipeline.gsr'),
+        fc_types=to_list(get_val(args.fc_types, 'pipeline.fc_types', ['corr', 'partial', 'tangent', 'glasso'])),
+        models=to_list(get_val(args.models, 'pipeline.models', ['logreg'])),
+        skip_glasso=get_val(args.skip_glasso, 'pipeline.skip_glasso', False),
+        precomputed_glasso_dir=get_val(args.precomputed_glasso, 'pipeline.precomputed_glasso_dir'),
+        n_permutations=get_val(args.n_permutations, 'pipeline.n_permutations', 0),
+        data_path=get_val(args.data_path, 'data.data_path'),
+        output_dir=get_val(args.output_dir, 'output.output_dir', 'results/pipelines'),
+        n_few_shot=get_val(None, 'few_shot.n_few_shot', 10),
+        n_repeats=get_val(None, 'few_shot.n_repeats', 10),
+        scale=not get_val(args.no_scale, 'pipeline.no_scale', False),
     )
+    
+    results = run_full_pipeline(cfg)
+    print("\nSUMMARY:")
+    print(results.summary.to_string(index=False))
 
-    run_full_pipeline(config)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

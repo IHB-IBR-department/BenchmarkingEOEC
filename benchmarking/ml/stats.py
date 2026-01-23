@@ -111,7 +111,7 @@ def build_estimator(
         return LogisticRegression(**{**defaults, **params})
 
     if model == "svm_rbf":
-        defaults = {"kernel": "rbf", "C": 1.0, "gamma": "scale"}
+        defaults = {"kernel": "rbf", "C": 1.0, "gamma": "scale", "probability": True}
         params.pop("kernel", None)
         params.pop("random_state", None)  # SVC doesn't support random_state unless probability=True
         return SVC(**{**defaults, **params})

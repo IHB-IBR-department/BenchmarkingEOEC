@@ -16,7 +16,7 @@ drop_subjects: [sub-3258811]
 
 mask: true
 mask_percentile: 95
-save_edgewise: false
-edgewise_output_dir: "icc_results"
-output: "icc_results/icc_summary_full.csv"
+save_edgewise: true
+edgewise_output_dir: "results/icc_results/edgewise"
+output: "results/icc_results/icc_summary_full.csv"
 pattern: "*.npy"

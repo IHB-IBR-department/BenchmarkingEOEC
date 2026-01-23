@@ -40,5 +40,5 @@ Thumbs.db
 *.local
 
 # Project outputs
-results/
 *.log
+results/

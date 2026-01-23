@@ -266,6 +266,7 @@ def run_icc_computation(
     fc_suffixes: list[str] | None = None,
     drop_subjects: list[str] | None = None,
     subject_order_lookup: Callable[[Path], list[str] | None] | None = None,
+    skip_keys: set[tuple[str, str, str, str, str, str]] | None = None,
 ) -> pd.DataFrame:
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -327,9 +328,28 @@ def run_icc_computation(
     if drop_list and subject_order_lookup is None:
         raise ValueError("drop_subjects provided but no subject_order_lookup available.")
 
+    skipped_count = 0
     for path in tqdm(files, desc="Computing ICC", unit="file"):
         if save_edgewise and edgewise_output_dir is None:
             raise ValueError("edgewise_output_dir is required when save_edgewise=True")
+
+        meta = parse_strategy_from_name(path)
+        if meta is None:
+            print(f"Skip {path} (unable to parse strategy metadata).")
+            continue
+
+        if skip_keys:
+            key = (
+                str(meta["site"]),
+                str(meta["condition"]),
+                str(meta["atlas"]),
+                str(meta["strategy"]),
+                str(meta["gsr"]),
+                str(meta["fc"]),
+            )
+            if key in skip_keys:
+                skipped_count += 1
+                continue
 
         arr = np.load(path)
         if arr.ndim != 3:
@@ -352,33 +372,26 @@ def run_icc_computation(
             percentile=mask_percentile,
             mask=edge_mask,
         )
-        meta = parse_strategy_from_name(path)
-        if meta is None:
-            print(f"Skip summary row for {path} (unable to parse strategy metadata).")
-        else:
-            row = {
-                "site": meta["site"],
-                "condition": meta["condition"],
-                "atlas": meta["atlas"],
-                "strategy": meta["strategy"],
-                "gsr": meta["gsr"],
-                "fc_type": meta["fc"],
-            }
-            for icc_kind in summary_icc_list:
-                stats = summary.get(icc_kind)
-                if stats is None:
-                    continue
-                row[f"{icc_kind}_mean"] = stats.get("mean", float("nan"))
-                row[f"{icc_kind}_std"] = stats.get("std", float("nan"))
-                row[f"{icc_kind}_mean_masked"] = stats.get("mean_masked", float("nan"))
-                row[f"{icc_kind}_std_masked"] = stats.get("std_masked", float("nan"))
-            summary_rows.append(row)
+        
+        row = {
+            "site": meta["site"],
+            "condition": meta["condition"],
+            "atlas": meta["atlas"],
+            "strategy": meta["strategy"],
+            "gsr": meta["gsr"],
+            "fc_type": meta["fc"],
+        }
+        for icc_kind in summary_icc_list:
+            stats = summary.get(icc_kind)
+            if stats is None:
+                continue
+            row[f"{icc_kind}_mean"] = stats.get("mean", float("nan"))
+            row[f"{icc_kind}_std"] = stats.get("std", float("nan"))
+            row[f"{icc_kind}_mean_masked"] = stats.get("mean_masked", float("nan"))
+            row[f"{icc_kind}_std_masked"] = stats.get("std_masked", float("nan"))
+        summary_rows.append(row)
 
         if save_edgewise:
-            meta = parse_strategy_from_name(path)
-            if meta is None:
-                print(f"Skip edgewise output for {path} (unable to parse strategy metadata).")
-                continue
             key = (meta["atlas"], meta["strategy"], meta["gsr"])
             fc_type = meta["fc"]
             key_bucket = edgewise_all.setdefault(key, {})
@@ -398,17 +411,24 @@ def run_icc_computation(
                 if masked_icc_bucket is not None:
                     masked_icc_bucket[icc_kind] = icc_vec[edge_mask]
 
+    if skipped_count > 0:
+        print(f"Skipped {skipped_count} already computed pipelines.")
+
     if save_edgewise and edgewise_output_dir is not None and edgewise_all:
         edgewise_output_dir.mkdir(parents=True, exist_ok=True)
         for (atlas, strategy, gsr), fc_map in edgewise_all.items():
+            # Save in atlas subfolder
+            atlas_dir = edgewise_output_dir / atlas
+            atlas_dir.mkdir(parents=True, exist_ok=True)
+
             base_name = f"{atlas}_strategy-{strategy}_{gsr}_edgewise_icc"
-            all_path = edgewise_output_dir / f"{base_name}_all.pkl"
+            all_path = atlas_dir / f"{base_name}_all.pkl"
             with all_path.open("wb") as handle:
                 pickle.dump(fc_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
             if mask:
                 masked_map = edgewise_masked.get((atlas, strategy, gsr))
                 if masked_map:
-                    masked_path = edgewise_output_dir / f"{base_name}_masked.pkl"
+                    masked_path = atlas_dir / f"{base_name}_masked.pkl"
                     with masked_path.open("wb") as handle:
                         pickle.dump(masked_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -480,9 +500,30 @@ def run_icc_from_config(config: dict[str, Any]) -> pd.DataFrame:
     edgewise_output_dir = Path(config.get("edgewise_output_dir") or "icc_results").expanduser()
     pattern = str(config.get("pattern") or "*.npy")
 
+    # Load existing results
+    output_path = _resolve_output_path(config.get("output"))
+    existing_df = pd.DataFrame()
+    skip_keys = set()
+    if output_path.exists():
+        try:
+            existing_df = pd.read_csv(output_path)
+            print(f"Loaded existing results from {output_path} ({len(existing_df)} rows).")
+            for _, row in existing_df.iterrows():
+                key = (
+                    str(row["site"]),
+                    str(row["condition"]),
+                    str(row["atlas"]),
+                    str(row["strategy"]),
+                    str(row["gsr"]),
+                    str(row["fc_type"]),
+                )
+                skip_keys.add(key)
+        except Exception as e:
+            print(f"Warning: Could not read existing results file: {e}")
+
     subject_order_lookup = _build_subject_order_lookup(fc_dir=fc_dir)
 
-    return run_icc_computation(
+    new_df = run_icc_computation(
         input_path=fc_dir,
         icc_list=icc_list,
         pattern=pattern,
@@ -495,7 +536,10 @@ def run_icc_from_config(config: dict[str, Any]) -> pd.DataFrame:
         fc_suffixes=fc_suffixes,
         drop_subjects=drop_subjects,
         subject_order_lookup=subject_order_lookup,
+        skip_keys=skip_keys,
     )
+
+    return pd.concat([existing_df, new_df], ignore_index=True)
 
 
 def main() -> int:

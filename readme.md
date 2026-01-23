@@ -11,7 +11,8 @@ Preprocessed time series data are available for download:
 - **Beijing (China) EOEC dataset**: [Google Drive link](https://drive.google.com/file/d/1N1wdbF0tsrAzL9GSgUK_y4xBNDiPLH5X/view?usp=sharing)
 - **IHB (St. Petersburg) dataset**: [link TBD]
 
-**For detailed data format descriptions, see [DataDescription.md](DataDescription.md).**
+**For detailed data format descriptions, see [DataDescription.md](DataDescription.md).
+For detailed methodology descriptions, see [Methods.md](Methods.md).**
 
 ## Dataset description
 
@@ -378,13 +379,13 @@ Few-shot (per pipeline):
 - `results/pipelines/<atlas>_strategy-<strategy>_<gsr>/summary.csv` combined summary
 
 QC–FC:
-- `results/qcfc/qc_fc_*.csv` per-pipeline QC–FC summaries
-- `results/qcfc/edge_correlations/*.npy` edge-wise correlations (if enabled in config)
+- `results/qcfc/qc_fc_*.csv` per-pipeline QC–FC summaries. **Note:** Scripts skip computation if the pipeline exists in this file.
+- `results/qcfc/edge_correlations/<site>/<atlas>/*.csv` edge-wise correlations (if enabled in config).
 
 ICC (China close test–retest):
 - `<data_root>/icc_precomputed_fc/<atlas>/*.npy` precomputed FC vectors with session axis
-- `icc_results/icc_summary_*.csv` per-pipeline ICC summary table (mean/std, masked/unmasked)
-- `icc_results/*_edgewise_icc_all.pkl` and `icc_results/*_edgewise_icc_masked.pkl` edge-wise ICC vectors (if enabled)
+- `icc_results/icc_summary_*.csv` per-pipeline ICC summary table (mean/std, masked/unmasked). **Note:** Scripts skip computation if the pipeline exists in this file.
+- `icc_results/<atlas>/*_edgewise_icc_all.pkl` and `icc_results/<atlas>/*_edgewise_icc_masked.pkl` edge-wise ICC vectors (if enabled)
 
 ## Coverage-based ROI masking (optional)
 

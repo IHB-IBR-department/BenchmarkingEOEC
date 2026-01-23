@@ -565,7 +565,8 @@ def _save_edge_correlations(
     output_dir : str
         Directory to save the CSV file
     """
-    output_path = Path(output_dir).expanduser()
+    # Save in site/atlas subfolders
+    output_path = Path(output_dir).expanduser() / site / atlas
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Build filename
@@ -627,6 +628,26 @@ def run_qcfc_from_config(config: dict) -> pd.DataFrame:
     save_edge_correlations = config.get('save_edge_correlations', False)
     edge_correlations_dir = config.get('edge_correlations_dir', 'results/qcfc/edge_correlations')
 
+    # Load existing results
+    output_path = Path(config.get('output', 'results/qc_fc_results.csv')).expanduser()
+    existing_df = pd.DataFrame()
+    existing_keys = set()
+    if output_path.exists():
+        try:
+            existing_df = pd.read_csv(output_path)
+            print(f"Loaded existing results from {output_path} ({len(existing_df)} rows).")
+            for _, row in existing_df.iterrows():
+                key = (
+                    str(row['site']),
+                    str(row['atlas']),
+                    str(row['strategy']),
+                    str(row['gsr']),
+                    str(row['fc_type'])
+                )
+                existing_keys.add(key)
+        except Exception as e:
+            print(f"Warning: Could not read existing results file: {e}")
+
     # Generate pipeline configurations
     pipeline_configs = []
 
@@ -640,6 +661,7 @@ def run_qcfc_from_config(config: dict) -> pd.DataFrame:
                 print(f"Warning: Coverage mask not found for {atlas}, skipping masking")
                 coverage_masks[atlas] = None
 
+    skipped_count = 0
     for site in sites:
         for atlas in atlases:
             coverage_mask = coverage_masks.get(atlas) if use_coverage_mask else None
@@ -648,17 +670,26 @@ def run_qcfc_from_config(config: dict) -> pd.DataFrame:
             for strategy in strategies:
                 for gsr in gsr_options:
                     for fc_type in fc_types:
+                        key = (str(site), str(atlas), str(strategy), str(gsr), str(fc_type))
+                        if key in existing_keys:
+                            skipped_count += 1
+                            continue
+
                         pipeline_configs.append((
                             site, atlas, strategy, gsr, fc_type,
                             coverage_mask, data_path, save_edge_correlations
                         ))
 
-    print(f"Running QC-FC for {len(pipeline_configs)} pipeline configurations")
+    print(f"Running QC-FC for {len(pipeline_configs)} pipeline configurations (skipped {skipped_count})")
+    
+    if not pipeline_configs:
+        return existing_df
+
     print(f"Using {n_workers} workers")
     if save_edge_correlations:
         edge_corr_path = Path(edge_correlations_dir).expanduser()
         edge_corr_path.mkdir(parents=True, exist_ok=True)
-        print(f"Saving edge correlations to: {edge_corr_path}")
+        print(f"Saving edge correlations to subfolders in: {edge_corr_path}")
 
     # Run with progress bar
     results = []
@@ -755,7 +786,7 @@ def run_qcfc_from_config(config: dict) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    return df
+    return pd.concat([existing_df, df], ignore_index=True)
 
 
 def main():

@@ -1,6 +1,8 @@
 # QC-FC Quick Test Configuration
 # ================================
 # Runs QC-FC for a subset of pipelines for testing.
+#
+# Note: The script checks the 'output' file and skips pipelines that are already present.
 
 # Data paths
 data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
@@ -8,20 +10,16 @@ data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
 # Sites to analyze
 sites:
   - china
+  - ihb
 
 # Pipeline parameters (subset for quick testing)
 atlases:
   - AAL
+  - Schaefer200
 
 # Strategies: 1-6 are standard denoising, AROMA_aggr/AROMA_nonaggr are ICA-AROMA
 strategies:
-  - 1
-  - 2
-  - 3
   - 4
-  - 5
-  - 6
-  - AROMA_aggr
   - AROMA_nonaggr
 
 gsr_options:
@@ -43,8 +41,8 @@ n_workers: 4
 
 
 # Output
-output: "results/qcfc/china/AAL/qc_fc_atlas.csv"
+output: "results/qcfc/qc_fc_atlas.csv"
 
 # Edge-wise correlations (optional)
 save_edge_correlations: true
-edge_correlations_dir: "results/qcfc/china/AAL/edge_correlations"
+edge_correlations_dir: "results/qcfc/edge_correlations"  # Script creates <site>/<atlas> subfolders here automatically

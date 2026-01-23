@@ -120,23 +120,34 @@ class ConnectomeTransformer:
         self.connectivity_measure_: Optional[ConnectivityMeasure] = None
         self.is_fitted_: bool = False
 
-    def _validate_input(self, timeseries: np.ndarray) -> np.ndarray:
+    def _validate_input(self, timeseries: np.ndarray | list[np.ndarray]) -> np.ndarray | list[np.ndarray]:
         """Validate and convert input to proper shape."""
         if isinstance(timeseries, list):
-            timeseries = np.array(timeseries)
+            if len(timeseries) == 0:
+                raise ValueError("Empty timeseries list")
+            n_nodes = timeseries[0].shape[-1]
+            for i, ts in enumerate(timeseries):
+                if ts.ndim != 2:
+                    raise ValueError(f"Element {i} in timeseries list must be 2D (timepoints, nodes), got {ts.ndim}D")
+                if ts.shape[-1] != n_nodes:
+                    raise ValueError(f"Element {i} has {ts.shape[-1]} nodes, expected {n_nodes}")
+            return timeseries
 
-        if timeseries.ndim != 3:
-            raise ValueError(
-                f"Input timeseries should have shape (n_subjects, n_timepoints, n_nodes), "
-                f"but got {timeseries.shape}"
-            )
-        return timeseries
+        if isinstance(timeseries, np.ndarray):
+            if timeseries.ndim != 3:
+                raise ValueError(
+                    f"Input timeseries array should have shape (n_subjects, n_timepoints, n_nodes), "
+                    f"but got {timeseries.shape}"
+                )
+            return timeseries
+            
+        raise TypeError(f"timeseries must be np.ndarray or list of np.ndarray, got {type(timeseries)}")
 
     def _vectorize(self, conn: np.ndarray) -> np.ndarray:
         """Vectorize FC matrices to upper triangle."""
         return sym_matrix_to_vec(conn, discard_diagonal=self.discard_diagonal)
 
-    def fit(self, timeseries: np.ndarray) -> 'ConnectomeTransformer':
+    def fit(self, timeseries: np.ndarray | list[np.ndarray]) -> 'ConnectomeTransformer':
         """
         Fit the transformer on training time series.
 
@@ -145,8 +156,10 @@ class ConnectomeTransformer:
 
         Parameters
         ----------
-        timeseries : np.ndarray
-            Time series data with shape (n_subjects, n_timepoints, n_nodes).
+        timeseries : np.ndarray or list of np.ndarray
+            Time series data.
+            - If np.ndarray: shape (n_subjects, n_timepoints, n_nodes)
+            - If list: list of (n_timepoints, n_nodes) arrays
 
         Returns
         -------
@@ -176,14 +189,14 @@ class ConnectomeTransformer:
         # For tangent, this computes the reference matrix from training data
         self.connectivity_measure_ = ConnectivityMeasure(
             kind=nilearn_kind,
-            standardize=False,
+            standardize='zscore_sample',
         )
         self.connectivity_measure_.fit(timeseries)
         self.is_fitted_ = True
 
         return self
 
-    def transform(self, timeseries: np.ndarray) -> np.ndarray:
+    def transform(self, timeseries: np.ndarray | list[np.ndarray]) -> np.ndarray:
         """
         Transform time series to connectivity matrices.
 
@@ -192,8 +205,8 @@ class ConnectomeTransformer:
 
         Parameters
         ----------
-        timeseries : np.ndarray
-            Time series data with shape (n_subjects, n_timepoints, n_nodes).
+        timeseries : np.ndarray or list of np.ndarray
+            Time series data.
 
         Returns
         -------
@@ -217,14 +230,14 @@ class ConnectomeTransformer:
 
         return conn
 
-    def fit_transform(self, timeseries: np.ndarray) -> np.ndarray:
+    def fit_transform(self, timeseries: np.ndarray | list[np.ndarray]) -> np.ndarray:
         """
         Fit and transform in one step.
 
         Parameters
         ----------
-        timeseries : np.ndarray
-            Time series data with shape (n_subjects, n_timepoints, n_nodes).
+        timeseries : np.ndarray or list of np.ndarray
+            Time series data.
 
         Returns
         -------
@@ -233,7 +246,7 @@ class ConnectomeTransformer:
         """
         return self.fit(timeseries).transform(timeseries)
 
-    def _compute_glasso(self, timeseries: np.ndarray) -> np.ndarray:
+    def _compute_glasso(self, timeseries: np.ndarray | list[np.ndarray]) -> np.ndarray:
         """
         Compute graphical lasso FC for each subject.
 
@@ -245,7 +258,12 @@ class ConnectomeTransformer:
                 "Install with: pip install gglasso"
             )
 
-        n_subjects, _, n_nodes = timeseries.shape
+        if isinstance(timeseries, list):
+            n_subjects = len(timeseries)
+            n_nodes = timeseries[0].shape[1]
+        else:
+            n_subjects, _, n_nodes = timeseries.shape
+
         conn = np.zeros((n_subjects, n_nodes, n_nodes), dtype=np.float64)
 
         for sub in range(n_subjects):
@@ -840,13 +858,16 @@ def compute_fc_vectorized(
 
 
 def compute_fc_train_test(
-    ts_train: np.ndarray,
-    ts_test: np.ndarray,
+    ts_train: np.ndarray | list[np.ndarray],
+    ts_test: np.ndarray | list[np.ndarray],
     *,
-    fc_type: str,
+    kinds: list[str],
     coverage_mask: Optional[np.ndarray] = None,
+    glasso_train: Optional[np.ndarray] = None,
+    glasso_test: Optional[np.ndarray] = None,
     glasso_lambda: float = 0.03,
-) -> tuple[np.ndarray, np.ndarray]:
+    vectorize: bool = True,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """
     Compute VECTORIZED FC for train and test data with leakage-safe tangent.
 
@@ -854,44 +875,100 @@ def compute_fc_train_test(
 
     Parameters
     ----------
-    ts_train : np.ndarray
-        Training timeseries, shape (n_train, n_timepoints, n_rois)
-    ts_test : np.ndarray
-        Test timeseries, shape (n_test, n_timepoints, n_rois)
-        NOTE: Can have different n_timepoints than ts_train.
-    fc_type : str
-        FC type: 'corr', 'partial', 'tangent', 'glasso'
+    ts_train : np.ndarray or list of np.ndarray
+        Training timeseries.
+    ts_test : np.ndarray or list of np.ndarray
+        Test timeseries.
+    kinds : list[str]
+        List of FC types to compute: 'corr', 'partial', 'tangent', 'glasso'
     coverage_mask : np.ndarray, optional
-        Boolean mask of good ROIs (True = keep)
+        Boolean mask of good ROIs (True = keep). Applied to timeseries.
+    glasso_train : np.ndarray, optional
+        Precomputed glasso for training set. Used if 'glasso' in kinds.
+    glasso_test : np.ndarray, optional
+        Precomputed glasso for test set. Used if 'glasso' in kinds.
     glasso_lambda : float
-        L1 regularization for glasso
+        L1 regularization for glasso (if computing on-the-fly)
+    vectorize : bool
+        If True, return vectorized FC (n_samples, n_edges).
 
     Returns
     -------
-    X_train : np.ndarray
-        Training FC, shape (n_train, n_edges) - VECTORIZED
-    X_test : np.ndarray
-        Test FC, shape (n_test, n_edges) - VECTORIZED
+    dict[str, tuple[np.ndarray, np.ndarray]]
+        Dictionary mapping FC type to (X_train, X_test) tuples.
     """
-    # Compute FC for train (and get tangent transformer if applicable)
-    X_train, tangent_transformer = compute_fc_vectorized(
-        ts_train,
-        fc_type=fc_type,
-        coverage_mask=coverage_mask,
-        glasso_lambda=glasso_lambda,
-        tangent_transformer=None,  # Fit new for train
-    )
+    # Apply coverage mask
+    if coverage_mask is not None:
+        coverage_mask = np.asarray(coverage_mask, dtype=bool)
+        
+        # Check ROI count against first subject
+        # If list: check first element
+        # If array: check shape[2]
+        if isinstance(ts_train, list):
+            n_rois = ts_train[0].shape[-1]
+        else:
+            n_rois = ts_train.shape[2]
+            
+        if coverage_mask.shape[0] != n_rois:
+            raise ValueError(
+                f"Coverage mask length {coverage_mask.shape[0]} does not match "
+                f"ROI count {n_rois}"
+            )
 
-    # Compute FC for test (use train's tangent transformer for leakage control)
-    X_test, _ = compute_fc_vectorized(
-        ts_test,
-        fc_type=fc_type,
-        coverage_mask=coverage_mask,
-        glasso_lambda=glasso_lambda,
-        tangent_transformer=tangent_transformer,  # Use train's reference
-    )
+        def _apply_mask(ts):
+            if isinstance(ts, list):
+                return [t[:, coverage_mask] for t in ts]
+            else:
+                return ts[:, :, coverage_mask]
 
-    return X_train, X_test
+        ts_train = _apply_mask(ts_train)
+        ts_test = _apply_mask(ts_test)
+
+    results = {}
+    valid_kinds = {'corr', 'partial', 'tangent', 'glasso'}
+    
+    for kind in kinds:
+        if kind not in valid_kinds:
+            raise ValueError(f"Unknown FC kind: {kind}")
+
+        if kind == 'glasso' and glasso_train is not None and glasso_test is not None:
+            # Use precomputed glasso
+            results['glasso'] = (glasso_train, glasso_test)
+            continue
+            
+        if kind == 'tangent':
+            # Leakage-safe tangent: fit on train, transform test
+            transformer = ConnectomeTransformer(
+                kind='tangent',
+                vectorize=vectorize,
+                discard_diagonal=True,
+            )
+            X_train = transformer.fit_transform(ts_train)
+            X_test = transformer.transform(ts_test)
+            results['tangent'] = (X_train, X_test)
+            continue
+
+        # For corr/partial/glasso (if not precomputed), compute independently
+        transformer = ConnectomeTransformer(
+            kind=kind,
+            vectorize=vectorize,
+            discard_diagonal=True,
+            glasso_lambda=glasso_lambda,
+        )
+        X_train = transformer.fit_transform(ts_train)
+        
+        # New transformer for test (independent)
+        transformer_test = ConnectomeTransformer(
+            kind=kind,
+            vectorize=vectorize,
+            discard_diagonal=True,
+            glasso_lambda=glasso_lambda,
+        )
+        X_test = transformer_test.fit_transform(ts_test)
+        
+        results[kind] = (X_train, X_test)
+
+    return results
 
 
 def get_fc_types_to_compute(
