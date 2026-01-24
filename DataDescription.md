@@ -1,5 +1,11 @@
 # Data Description for EOEC Benchmarking Study
 
+**Data Availability:** All data necessary to reproduce the results of this study (preprocessed timeseries, precomputed FC, and coverage masks) are available at: [https://disk.yandex.ru/d/kvxN8bP3xiw8nQ](https://disk.yandex.ru/d/kvxN8bP3xiw8nQ)
+
+**Note on Original Source:**
+- **Beijing EOEC Dataset**: Original raw data available at [NITRC](https://fcon_1000.projects.nitrc.org/indi/retro/BeijingEOEC.html). Financial support for the data used in this project was provided by a grant from the National Natural Science Foundation of China: 30770594 and a grant from the National High Technology Program of China (863): 2008AA02Z405.
+- **IHB RAS Dataset**: Derivative time series provided via the Yandex Disk link above.
+
 ## Overview
 
 This document describes the data structure and formats for benchmarking resting-state fMRI functional connectivity pipelines for Eyes Open vs Eyes Closed classification. The benchmark enumerates all combinations of denoising strategy × GSR × atlas × FC type (256 FC pipelines per classifier), with optional additional ML models.
@@ -78,12 +84,6 @@ timeseries_ihb/
 - Standard strategies: 6 strategies × 2 GSR options × 2 conditions = 24 files
 - AROMA strategies: 2 variants × 2 GSR options × 2 conditions = 8 files
 - **Total: 32 .npy files per atlas**
-
-#### Beijing EOEC Dataset (China)
-
-**Location:** `timeseries_china/`
-
-**Data source:** These data include 48 healthy controls from a community (student) sample from Beijing Normal University in China. The original dataset is available at https://fcon_1000.projects.nitrc.org/indi/retro/BeijingEOEC.html
 
 Each participant has 3 resting state fMRI scans:
 - First scan: Eyes Closed (EC)
