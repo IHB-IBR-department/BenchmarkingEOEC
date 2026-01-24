@@ -33,6 +33,7 @@ from data_utils.timeseries import (
     load_precomputed_glasso,
     check_precomputed_glasso_available,
 )
+from data_utils.hcpex import preprocess_hcpex_timeseries
 from data_utils.fc import compute_fc_train_test
 from benchmarking.ml.stats import run_classification_with_permutation
 
@@ -140,8 +141,22 @@ def run_full_pipeline(config: PipelineConfig) -> PipelineResults:
     china_n_sub = len(china_close)
     china_y = np.array([0] * china_n_sub + [1] * china_n_sub)
 
+    # Apply HCPex fix if needed
+    if config.atlas.upper() == 'HCPEX':
+        from data_utils.paths import resolve_data_root
+        data_root = resolve_data_root(config.data_path)
+        mask_path = data_root / "coverage" / "hcp_mask.npy"
+        
+        print("Applying HCPex dimension fix (alignment to 373 ROIs)...")
+        ihb_ts = preprocess_hcpex_timeseries(ihb_ts, "ihb", mask_path)
+        china_ts = preprocess_hcpex_timeseries(china_ts, "china", mask_path)
+
     # Load Coverage Mask (IHB)
     coverage_mask = load_ihb_coverage_mask(config.atlas, config.data_path, config.coverage_threshold)
+
+    # For HCPex, coverage_mask is disabled (pre-masked to 373)
+    if config.atlas.upper() == 'HCPEX':
+        coverage_mask = None
 
     # 2. Handle Glasso Loading (if needed)
     glasso_ihb = None

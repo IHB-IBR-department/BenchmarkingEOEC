@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the data structure and formats for benchmarking resting-state fMRI functional connectivity pipelines for Eyes Open vs Eyes Closed classification. The study evaluates 192 distinct preprocessing pipelines across two independent datasets.
+This document describes the data structure and formats for benchmarking resting-state fMRI functional connectivity pipelines for Eyes Open vs Eyes Closed classification. The benchmark enumerates all combinations of denoising strategy × GSR × atlas × FC type (256 FC pipelines per classifier), with optional additional ML models.
 
 **For analysis workflows and instructions, see `readme.md`.**
 
@@ -10,7 +10,9 @@ This document describes the data structure and formats for benchmarking resting-
 
 ## Data Organization
 
-The local data directory (`~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/`) contains:
+The local data directory (e.g., `~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data/`) contains:
+
+- Scripts resolve this root from `--data-path` / YAML `data_path`, or the `OPEN_CLOSE_BENCHMARK_DATA` env var (see `data_utils/paths.py`).
 
 ```
 OpenCloseBenchmark_data/
@@ -648,7 +650,7 @@ fc_test = transformer.transform(ihb_close[60:])
 | **Strategies** | 16 | 16 | 6 standard + 2 AROMA × 2 GSR |
 | **Atlases** | 4 | 4 | AAL, Schaefer200, Brainnetome, HCPex |
 | **Files per atlas** | 32 | 32 | Time series .npy files |
-| **Total pipelines** | 192 | 192 | 4 atlases × 16 strategies × 3 FC types (corr/partial/tangent) + glasso |
+| **Total FC pipelines (per ML model)** | 256 | 256 | 4 atlases × 16 (strategy×GSR) × 4 FC types (corr/partial/tangent/glasso) |
 
 ### ROI Counts by Atlas
 

@@ -1,118 +1,62 @@
 # Statistical Analysis Plan
 
-This document outlines the statistical framework for evaluating and comparing functional connectivity (FC) pipelines across three key dimensions: Reliability (ICC), Quality Control (QC-FC), and Predictive Validity (ML Classification).
+This document outlines the final statistical framework for evaluating and comparing functional connectivity (FC) pipelines across Reliability (ICC), Quality Control (QC-FC), and Predictive Validity (ML).
 
-## 1. Overview of Metrics
+## 1. Primary Metrics
 
-| Dimension | Metric | Interpretation | Unit of Analysis |
-|-----------|--------|----------------|------------------|
-| **Reliability** | Intraclass Correlation (ICC 3,1) | Higher is better (0-1) | Edge-wise (aggregated to mean per pipeline) |
-| **QC-FC** | QC-FC Mean |r| | Lower is better (0-1) | Edge-wise correlation with motion (aggregated to mean per pipeline) |
-| **Prediction** | Classification Accuracy / AUC | Higher is better (0.5-1.0) | Subject-level predictions (aggregated to mean per pipeline) |
-
----
-
-## 2. Primary Research Questions
-
-The analysis is structured by metric type, prioritizing factors that are theoretically expected to drive performance.
-
-### A. Reliability (ICC) & Quality Control (QC-FC)
-**Primary Factors:** Denoising Strategy, FC Type
-**Secondary Factor:** GSR (Global Signal Regression)
-**Note:** Atlas choice is considered a "nuisance" factor for these metrics, as it primarily affects the spatial aggregation scale rather than the fundamental signal quality.
-
-**Questions:**
-1.  **Denoising Strategy:** Which strategy (1-6, AROMA) yields the most reliable FC estimates (highest ICC) and best motion artifact removal (lowest QC-FC)?
-2.  **FC Type:** Does using Tangent Space or Partial Correlation improve reliability compared to Pearson Correlation?
-3.  **GSR:** Does the inclusion of GSR consistently improve motion removal (QC-FC) and does it come at a cost to reliability (ICC)?
-
-### B. Machine Learning Prediction (ML)
-**Primary Factors:** Denoising Strategy, FC Type, Atlas
-**Secondary Factor:** GSR
-
-**Questions:**
-1.  **Predictive Power:** Which combination of Atlas, Denoising Strategy, and FC Type maximizes cross-site classification accuracy?
-2.  **Atlas Sensitivity:** Does increasing ROI resolution (e.g., Schaefer200 vs AAL) improve predictive performance?
-3.  **Generalization:** Which pipelines offer the best few-shot adaptation performance?
+| Dimension | Metric | Interpretation |
+|-----------|--------|----------------|
+| **Reliability** | Masked ICC (3,1), (2,1), (1,1) | Higher is better (0-1) |
+| **QC-FC** | Mean absolute correlation (|r|) | Lower is better (0-1) |
+| **Prediction** | Cross-Site Accuracy & ROC-AUC | Higher is better (0.5-1.0) |
 
 ---
 
-## 3. Statistical Comparisons
+## 2. Factor Importance Analysis (N-way ANOVA)
 
-We employ a hierarchical approach: first assessing global differences across primary factors using omnibus tests, followed by planned post-hoc comparisons.
+We use N-way Analysis of Variance (ANOVA) to determine which processing choices drive the most variance in performance.
 
-### A. Omnibus Tests (Global Differences)
-
-- **Test:** Friedman Rank Sum Test.
-- **Why:** Non-parametric test suitable for repeated measures (pipelines evaluated on the same subjects/edges).
-- **Application:**
-    - **ICC & QC-FC:** Test for differences in **Denoising Strategy** (blocking on Atlas, GSR, FC Type).
-    - **ML:** Test for differences in **Atlas** (blocking on Strategy, GSR, FC Type).
-
-### B. Post-Hoc Pairwise Comparisons
-If the omnibus test is significant ($p < 0.05$), we proceed with pairwise comparisons.
-
-- **Test:** Nemenyi test.
-- **Correction:** Implicitly corrects for multiple comparisons.
-- **Visualization:** Critical Difference (CD) diagrams.
-
-### C. Factor-Level Comparisons (Effect of Single Choice)
-
-#### 1. GSR vs. noGSR
-- **Hypothesis:** GSR improves QC-FC (reduces motion) but may have mixed effects on ICC and ML accuracy.
-- **Test:** Wilcoxon Signed-Rank Test (paired).
-- **Unit:** The pair of (GSR, noGSR) values for each Strategy/Atlas/FC-Type combination.
-
-#### 2. FC Type Comparison (e.g., Tangent vs. Correlation)
-- **Hypothesis:** Tangent space projection improves ML classification accuracy and potentially ICC.
-- **Test:** Wilcoxon Signed-Rank Test on distribution of pipeline scores.
+- **Model:** `Metric ~ Strategy + GSR + FC_Type + Atlas + [Site] + [Condition]`
+- **Effect Size:** **Partial Eta-Squared ($\eta_p^2$)** is the primary measure of factor importance.
+- **Calculation:** $\eta_p^2 = \frac{SS_{effect}}{SS_{effect} + SS_{error}}$, where $SS_{effect}$ is the sum of squares for the factor and $SS_{error}$ is the residual sum of squares.
+- **Interpretation:** $\eta_p^2$ represents the proportion of variance explained by a factor after accounting for other factors in the model. This allows for comparing the relative impact of "Denoising Strategy" vs. "FC Type" across different benchmarking dimensions.
 
 ---
 
-## 4. Analysis Implementation Details
+## 3. Global Factor Comparisons (Paired Randomization)
 
-### ICC & QC-FC Analysis
-**Input**: Summary CSVs (`icc_summary.csv`, `qc_fc_results.csv`).
+To evaluate the global impact of a single processing choice (e.g., "Does GSR help?"), we use matched-pair randomization tests.
 
-1. **Descriptive Stats**: Compute mean and SD of ICC/QC-FC for each Strategy/FC-Type combination (averaged across Atlases).
-2. **Strategy Ranking**: Rank strategies from 1 (best) to N (worst) based on mean ICC and QC-FC.
-3. **Correlation**: Compute Spearman correlation between ICC and QC-FC ranks to test if better motion cleaning correlates with higher reliability.
-
-### Machine Learning Analysis
-**Input**: Per-sample prediction CSVs (`*_test_outputs.csv`).
-
-1. **Pipeline vs. Chance**: Permutation test (1000 permutations).
-2. **Pairwise Model Comparison**:
-   - **Accuracy**: Exact McNemar’s test.
-   - **AUC**: DeLong’s test.
-3. **Few-Shot Learning Curve**: Analyze performance gain as $k$ (target subjects) increases.
+- **Method:** **Sign-Flip Randomization Test (5,000 permutations)**.
+- **Unit of Analysis:** Subject-level loss (Brier score or Accuracy).
+- **Matching:** We pair pipelines that differ *only* by the factor of interest (e.g., `AAL_1_GSR_corr` vs `AAL_1_noGSR_corr`).
+- **Tests Performed:**
+    1. **GSR vs. noGSR**: Global impact of global signal regression.
+    2. **Tangent vs. Corr**: Global impact of Riemannian tangent projection vs. Pearson correlation.
+    3. **Brainnetome vs. Others**: Impact of atlas selection (Brainnetome vs. average of others).
 
 ---
 
-## 5. Example Code Snippet (Python)
+## 4. Pipeline-Specific Comparisons
 
-```python
-import pandas as pd
-from scipy.stats import friedmanchisquare, wilcoxon
-import scikit_posthocs as sp
+- **Vs. Chance:** **Permutation Test (1,000 repeats)**. Shuffles training labels to establish empirical p-values for each specific pipeline. To account for the large number of pipelines (259+), p-values are corrected using the **False Discovery Rate (FDR, Benjamini-Hochberg)**.
+- **Vs. Each Other (Few-Shot):** **Linear Mixed-Effects Models (LMM)** are used to compare metrics (Accuracy/AUC) while accounting for the dependency across the 50 random splits.
+    - **Formula:** `Metric ~ FC_Type + (1 | Pipeline_ID)`
+    - This allows for a robust statistical answer to whether one metric (e.g., Tangent) significantly outperforms another (e.g., Pearson) across the variability of denoising strategies.
 
-# Load results
-df = pd.read_csv("results/icc_results/icc_summary.csv")
+---
 
-# 1. Friedman Test for Strategies (Blocking on Atlas/GSR/FC Type)
-# Reshape to (Strategies x Blocks)
-pivot_df = df.pivot_table(index=['atlas', 'gsr', 'fc_type'], columns='strategy', values='icc31_mean')
-stat, p = friedmanchisquare(*[pivot_df[col] for col in pivot_df.columns])
-print(f"Friedman Test (Strategies): Statistic={stat:.3f}, p={p:.3e}")
+## 5. Implementation Details
 
-# 2. Nemenyi Post-hoc
-if p < 0.05:
-    nemenyi = sp.posthoc_nemenyi_friedman(pivot_df.values)
-    print(nemenyi)
+### Reliability (ICC)
+- **Masking:** Only the top 5% of edges by weight are included to avoid the "null edge" bias in sparse connectivity methods.
+- **Exclusion:** Primary statistical reports are generated excluding the HCPex atlas to avoid high-dimensionality bias in the OLS models, though figures are provided for all four atlases.
 
-# 3. GSR Effect (Wilcoxon)
-gsr = df[df['gsr'] == 'GSR']['icc31_mean'].values
-nogsr = df[df['gsr'] == 'noGSR']['icc31_mean'].values
-w_stat, w_p = wilcoxon(gsr, nogsr)
-print(f"GSR vs noGSR: W={w_stat}, p={w_p:.3e}")
-```
+### Quality Control (QC-FC)
+- **Aggregation:** For the China dataset, correlations from the two EC sessions are averaged into a single `unified_close` value per pipeline before ANOVA.
+- **Condition:** "Open" and "Close" states are treated as a factor in the QC-FC ANOVA to test for state-dependent motion contamination.
+
+### Machine Learning (ML)
+- **AUC Importance:** ANOVA is performed separately for Accuracy and ROC-AUC, as AUC is often more sensitive to connectivity metric choices.
+- **Few-Shot Stability:** Few-shot performance is aggregated over 50 random splits to ensure statistical stability.
+- **FDR Correction:** Applied separately for each cross-site direction (China->IHB and IHB->China).

@@ -42,3 +42,4 @@ Thumbs.db
 # Project outputs
 *.log
 results/
+docs/

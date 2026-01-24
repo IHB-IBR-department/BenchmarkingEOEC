@@ -1,10 +1,20 @@
-# Config for a full atlas run (multiple strategies)
-# Usage: python -m benchmarking.ml.pipeline --config configs/pipeline_atlas.yaml
+# ML HCPex-only Configuration
+atlases:
+  - HCPex
 
-# List of strategies and atlases to run
-strategies: [1, 2, 3, 4, 5, 6, "AROMA_aggr", "AROMA_nonaggr"]
-atlases: ["AAL", "Schaefer200", "Brainnetome", "HCPex"]
-gsr_options: ["GSR", "noGSR"]
+strategies:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - AROMA_aggr
+  - AROMA_nonaggr
+
+gsr_options:
+  - GSR
+  - noGSR
 
 pipeline_defaults:
   fc_types: [corr, partial, tangent, glasso]
@@ -36,3 +46,4 @@ output:
 few_shot:
   n_few_shot: 20
   n_repeats: 5
+

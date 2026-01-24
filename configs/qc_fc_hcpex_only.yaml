@@ -1,0 +1,51 @@
+# QC-FC HCPex Recomputation Configuration
+# ========================================
+# This config focuses strictly on the HCPex atlas to fix previous dimension mismatches.
+
+# Data paths
+data_path: "~/Yandex.Disk.localized/IHB/OpenCloseBenchmark_data"
+
+# Sites to analyze
+sites:
+  - ihb
+  - china
+
+# Atlas to fix
+atlases:
+  - HCPex
+
+# All strategies
+strategies:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - AROMA_aggr
+  - AROMA_nonaggr
+
+gsr_options:
+  - GSR
+  - noGSR
+
+fc_types:
+  - corr
+  - partial
+  - tangent
+  - glasso
+
+# ROI coverage masking 
+# For HCPex, the script now uses preprocess_hcpex_timeseries to align to 373 ROIs.
+use_coverage_mask: true
+coverage_threshold: 0.1
+
+# Execution
+n_workers: 4
+
+# Output
+output: "results/qcfc/qc_fc_hcpex_fixed.csv"
+
+# Edge-wise correlations (optional)
+save_edge_correlations: true
+edge_correlations_dir: "results/qcfc/edge_correlations"

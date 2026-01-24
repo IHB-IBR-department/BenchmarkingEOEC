@@ -42,6 +42,7 @@ from tqdm import tqdm
 
 from data_utils.paths import resolve_data_root
 from data_utils.fc import ConnectomeTransformer
+from data_utils.hcpex import preprocess_hcpex_timeseries
 
 
 # =============================================================================
@@ -383,7 +384,11 @@ def load_fc_for_qcfc(
             ts = ts[:, :, :, session_idx]
 
         # Apply coverage mask before FC computation
-        if coverage_mask is not None:
+        if atlas == "HCPex":
+            # HCPex requires special preprocessing due to varying dimensions across strategies/sites
+            mask_path = data_root / "coverage/hcp_mask.npy"
+            ts = preprocess_hcpex_timeseries(ts, site, mask_path)
+        elif coverage_mask is not None:
             ts = ts[:, :, coverage_mask]
 
         # Compute FC
