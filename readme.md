@@ -101,4 +101,3 @@ Raw (per-run) outputs are stored in `results/icc_results/`, `results/qcfc/`, and
 - **[DataDescription.md](DataDescription.md)**: File formats and naming conventions.
 - **[Methods.md](Methods.md)**: Technical details of ICC, QC-FC, and ML implementation.
 - **[StatisticalAnalysis.md](StatisticalAnalysis.md)**: Description of ANOVA and Permutation testing protocols.
-- **[Responses.md](Responses.md)**: Detailed responses to reviewer comments and roadmap of recent changes.
