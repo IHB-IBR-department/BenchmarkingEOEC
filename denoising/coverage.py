@@ -17,8 +17,8 @@ def new_mask_gsr(data, path_to_save, thr=0.6):
             mskr.fit(func_files)
             tr = mskr.transform(func_files)
             
-            # смотрим сигнал вокселя в определенный момент времени
-            # если он больше глобального сигнала, то оставляем
+            # Check voxel signal at each timepoint
+            # If it exceeds the global signal threshold, keep it
             a = np.array([tr[i] > (gs[i] * thr) for i in range(120)])
             t = tr * a
 
@@ -34,8 +34,8 @@ def coverage(atlas, mask):
     masker_labels = atlas.atlas_labels
     
 
-    # все что не ноль то один
-    # создаем бинарный атлас, чтобы потом считтать воксели
+    # Convert all non-zero values to one
+    # Create binary atlas for voxel counting
     atlas_img_bin = nib.Nifti1Image(
         (atlas_img.get_fdata() > 0).astype(np.uint8), 
         atlas_img.affine, 
@@ -50,7 +50,7 @@ def coverage(atlas, mask):
                             smoothing_fwhm=None,
                             standardize=False,
                             strategy="sum",
-                            resampling_target='data',  # !!!!!!!!!!!!!!!!!!!! check resampling 
+                            resampling_target='data',  # Note: verify resampling behavior
                             )
 
     # no mask image here !!
@@ -65,13 +65,12 @@ def coverage(atlas, mask):
                             )
 
 
-    # вместо мозга передаем бинаризованый атлас, 
-    # и считаем сколько вокселей попадает в маску (суммируем количество вокселей в рои)
+    # Pass the binarized atlas instead of brain image
+    # Count how many voxels fall within the mask (sum voxels per ROI)
     n_voxels_in_masked_parcels = sum_masker_masked.fit_transform(atlas_img_bin)
-    # считаем сколько всего вокселей в рои в атласе
+    # Count total voxels per ROI in the atlas
     n_voxels_in_parcels = sum_masker_unmasked.fit_transform(atlas_img_bin)
-    # процент вокселей в маске
+    # Calculate proportion of voxels within the mask
     parcel_coverage = np.squeeze(n_voxels_in_masked_parcels / n_voxels_in_parcels)
 
-
-    
+    return parcel_coverage

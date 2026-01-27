@@ -15,9 +15,9 @@ import os
 
 @dataclass
 class DenoiseAROMA:
-    aroma_deriv_dir: str | Path          # деривативы fmripost-aroma (BIDS-derivatives dataset)
-    fmriprep_deriv_dir: str | Path       # деривативы fmriprep (BIDS-derivatives dataset)
-    atlas_labels_img: str | Path         # NIfTI atlas labels (например Schaefer)
+    aroma_deriv_dir: str | Path          # fmripost-aroma derivatives (BIDS-derivatives dataset)
+    fmriprep_deriv_dir: str | Path       # fmriprep derivatives (BIDS-derivatives dataset)
+    atlas_labels_img: str | Path         # NIfTI atlas labels (e.g., Schaefer)
     aroma_desc: str = "nonaggrDenoised"  # nonaggrDenoised/aggrDenoised/orthaggrDenoised
     space: str | None = "MNI152NLin6Asym"
     #res: str | None = None              # например "2" или "02" (зависит от именования)
@@ -30,7 +30,7 @@ class DenoiseAROMA:
         self.fmriprep_deriv_dir = Path(self.fmriprep_deriv_dir)
         self.atlas_labels_img = str(self.atlas_labels_img)
 
-        # PyBIDS: индексируем каждый derivatives dataset отдельно
+        # PyBIDS: index each derivatives dataset separately
         self.layout_aroma = BIDSLayout(str(self.aroma_deriv_dir), 
                                        config=['bids', 'derivatives'],
                                        validate=False)
@@ -52,8 +52,8 @@ class DenoiseAROMA:
                           compcor_kind: str = "a",
                           n_compcor: int | None = None) -> pd.DataFrame:
         """
-        Выбирает WM/CSF CompCor + cosine drifts из fMRIPrep confounds TSV.
-        Колонки fMRIPrep: a_comp_cor_00..., t_comp_cor_00..., cosine_00... [web:54]
+        Select WM/CSF CompCor + cosine drifts from fMRIPrep confounds TSV.
+        fMRIPrep columns: a_comp_cor_00..., t_comp_cor_00..., cosine_00...
         """
         # cosine drifts
         cosine_cols = [c for c in df.columns if c.startswith("cosine")]
@@ -72,18 +72,18 @@ class DenoiseAROMA:
 
         keep = compcor_cols + cosine_cols
         if len(keep) == 0:
-            raise ValueError("Не найдены ни CompCor (a_comp_cor_/t_comp_cor_), ни cosine_* колонки в confounds TSV.")
+            raise ValueError("Neither CompCor (a_comp_cor_/t_comp_cor_) nor cosine_* columns found in confounds TSV.")
 
-        # Заполняем NaN, чтобы регрессия не падала
+        # Fill NaN values to prevent regression from failing
         out = df[keep].copy()
         out = out.fillna(0.0)
         return out
 
-    def _find_aroma_bold(self, subject: str, 
-                         task: str | None = None, 
+    def _find_aroma_bold(self, subject: str,
+                         task: str | None = None,
                          run: str | None = None):
         """
-        Ищет AROMA denoised BOLD (NIfTI) по BIDS-entities.
+        Find AROMA denoised BOLD (NIfTI) by BIDS-entities.
         """
         filters = dict(
             subject=subject,
@@ -103,14 +103,14 @@ class DenoiseAROMA:
 
         files = self.layout_aroma.get(return_type="file", **filters)
         if len(files) == 0:
-            raise FileNotFoundError(f"Не найден AROMA BOLD по фильтрам: {filters}")
+            raise FileNotFoundError(f"AROMA BOLD not found with filters: {filters}")
         if len(files) > 1:
-            raise RuntimeError(f"Найдено несколько AROMA BOLD файлов, уточните фильтры (task/run/space/res): {files}")
+            raise RuntimeError(f"Multiple AROMA BOLD files found, specify filters (task/run/space/res): {files}")
         return files[0]
 
     def _find_fmriprep_confounds(self, subject: str, task: str | None = None, run: str | None = None):
         """
-        Ищет fMRIPrep confounds TSV, соответствующий этому run/task.
+        Find fMRIPrep confounds TSV matching this run/task.
         """
         filters = dict(
             subject=subject,
@@ -124,16 +124,16 @@ class DenoiseAROMA:
         if run is not None:
             filters["run"] = run
         if self.space is not None:
-            # confounds TSV у fMRIPrep обычно без space, но иногда встречается; поэтому не фильтруем по space жестко
+            # fMRIPrep confounds TSV usually lacks space entity, but may include it; don't filter by space strictly
             pass
 
         files = self.layout_fmriprep.get(return_type="file", **filters)
         if len(files) == 0:
-            raise FileNotFoundError(f"Не найден fMRIPrep confounds TSV по фильтрам: {filters}")
+            raise FileNotFoundError(f"fMRIPrep confounds TSV not found with filters: {filters}")
         if len(files) > 1:
-            # Если несколько — попробуем выбрать тот, где совпадает session/acq и т.п. при необходимости
-            # Здесь — просто требуем уточнить.
-            raise RuntimeError(f"Найдено несколько confounds TSV, уточните фильтры (task/run/session/acq): {files}")
+            # If multiple found, could select by matching session/acq etc. if needed
+            # Here we simply require more specific filters
+            raise RuntimeError(f"Multiple confounds TSV found, specify filters (task/run/session/acq): {files}")
         return files[0]
 
     def denoise_one_subject(self,
@@ -143,7 +143,7 @@ class DenoiseAROMA:
                             save_outputs: bool = False,
                             folder: str | None = None) -> tuple[np.ndarray, dict]:
         """
-        Возвращает (roi_ts, info), где roi_ts: (T, Nroi)
+        Returns (roi_ts, info), where roi_ts shape is (T, Nroi).
         """
         bold = self._find_aroma_bold(subject=subject, task=task, run=run)
         conf_tsv = self._find_fmriprep_confounds(subject=subject, task=task, run=run)
@@ -193,7 +193,7 @@ class DenoiseAROMA:
                      save_outputs: bool = False,
                      folder: str | None = None) -> list[dict]:
         """
-        Возвращает список info-словарей (по subject/run), а не один.
+        Returns a list of info dictionaries (per subject/run), not a single one.
         """
         if subjects is None:
             subjects = self.list_subjects()
@@ -256,7 +256,7 @@ class DenoiseAROMA:
         if not os.path.exists(path_to_save):
             os.makedirs(path_to_save)
             
-        # TODO добавить в название файла GSR и smoothing
+        # TODO add GSR and smoothing to filename
 
         name = f'sub-{sub}_task-{task}_run-{run}_time-series_{atlas_name}_strategy-AROMA_{self.aroma_desc}-noGSR.csv'
 

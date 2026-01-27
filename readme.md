@@ -10,10 +10,42 @@ Code for the paper:
 
 ## Overview
 
-This repository evaluates **259+ distinct functional connectivity (FC) pipelines** for the classification of **Eyes Open (EO)** vs. **Eyes Closed (EC)** states. We benchmark these pipelines across three critical dimensions:
+This repository evaluates **256 distinct functional connectivity (FC) pipelines** for the classification of **Eyes Open (EO)** vs. **Eyes Closed (EC)** states. We benchmark these pipelines across three critical dimensions:
 1.  **Reliability**: Test-retest consistency using Intraclass Correlation (ICC).
 2.  **Motion Control**: Residual motion artifacts using QC-FC correlations.
 3.  **Predictive Validity**: Machine Learning (ML) classification accuracy across different scanners and sites.
+
+---
+
+## Denoising Strategies
+
+The benchmark evaluates **8 denoising strategies** (6 standard + 2 ICA-AROMA variants), each tested with and without Global Signal Regression (GSR):
+
+### Standard Strategies (1-6)
+
+| Strategy | Confound Regressors | Description |
+|----------|---------------------|-------------|
+| **1** | 24P | 24 motion parameters only |
+| **2** | aCompCor(5)+12P | 5 aCompCor components + 12 motion parameters |
+| **3** | aCompCor(50%)+12P | aCompCor explaining 50% variance + 12 motion parameters |
+| **4** | aCompCor(5)+24P | 5 aCompCor components + 24 motion parameters |
+| **5** | aCompCor(50%)+24P | aCompCor explaining 50% variance + 24 motion parameters |
+| **6** | a/tCompCor(50%)+24P | Combined anatomical & temporal CompCor (50% variance each) + 24 motion parameters |
+
+### ICA-AROMA Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| **AROMA_aggr** | AROMA Aggressive: Full regression of motion-related independent components |
+| **AROMA_nonaggr** | AROMA Non-Aggressive: Partial regression preserving signal components |
+
+**Motion parameters:**
+- **12P**: 6 realignment parameters (3 translation + 3 rotation) + 6 temporal derivatives
+- **24P**: 12P + 12 squared terms (quadratic expansion)
+
+**CompCor**: Component-based noise correction extracting principal components from anatomically-defined (aCompCor) or temporally-defined (tCompCor) noise regions.
+
+**Pipeline combinations**: 8 strategies × 2 GSR options × 4 atlases × 4 FC types = **256 FC pipelines** (per classifier).
 
 ---
 
@@ -81,6 +113,28 @@ Generates facet grid boxplots for all 128+ pipelines.
 python analysis/plot_few_shot_auc.py
 ```
 
+### 5. Feature Interpretation (Stable Biomarkers)
+Identifies robust EO/EC biomarkers via subsampling stability analysis. The approach repeatedly subsamples 80% of subjects (stratified by site), fits classifiers, and tracks which edges consistently contribute to classification across subsamples.
+
+**Key features:**
+- Subject-level sampling preserves paired EO/EC structure
+- Analyzes both Pearson correlation and Tangent FC types
+- Uses Schaefer200 atlas with Yeo 7-network parcellation
+- Outputs network-level heatmaps showing stable discriminative edges
+
+```bash
+# Quick test (5 iterations)
+python analysis/interpret_classification_coefficients.py --n-subsamples 5
+
+# Full analysis (1000 iterations, recommended)
+python analysis/interpret_classification_coefficients.py --n-subsamples 1000
+```
+
+**Outputs:**
+- `results/interpretation/subsample/`: Stability metrics and stable edge lists
+- `results/figures/stability_volcano_*.png`: Sign consistency vs. weight plots
+- `results/figures/heatmap_stable_*.png`: Network-level importance matrices
+
 ---
 
 ## Results & Reports
@@ -99,5 +153,5 @@ Raw (per-run) outputs are stored in `results/icc_results/`, `results/qcfc/`, and
 ## Detailed Documentation
 
 - **[DataDescription.md](DataDescription.md)**: File formats and naming conventions.
-- **[Methods.md](Methods.md)**: Technical details of ICC, QC-FC, and ML implementation.
+- **[Methods.md](Methods.md)**: Technical details of ICC, QC-FC, ML implementation, and feature interpretation.
 - **[StatisticalAnalysis.md](StatisticalAnalysis.md)**: Description of ANOVA and Permutation testing protocols.

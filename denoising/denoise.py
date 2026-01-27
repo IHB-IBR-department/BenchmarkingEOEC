@@ -65,7 +65,7 @@ class Denoising:
         self.int_strategy = strategy
         #self.ica_aroma = dataset.ica_aroma
 
-        assert strategy in [1, 2, 3, 4, 5, 6, 7, 8], 'Wrong strategy number'
+        assert strategy in [1, 2, 3, 4, 5, 6], 'Wrong strategy number (valid: 1-6)'
         #assert self.ica_aroma and strategy in [7, 8], 'ICA-AROMA can only be used with strategy 7 or 8'
 
         self.use_GSR = use_GSR
@@ -232,7 +232,7 @@ class Denoising:
         if not os.path.exists(path_to_save):
             os.makedirs(path_to_save)
             
-        # TODO добавить в название файла GSR и smoothing
+        # TODO add GSR and smoothing to filename
 
         name = f'sub-{sub}_task-{self.dataset.task}_run-{run+1}_time-series_{self.atlas.atlas_name}_strategy-{self.int_strategy}{"_GSR" if self.use_GSR else ""}.csv'
 

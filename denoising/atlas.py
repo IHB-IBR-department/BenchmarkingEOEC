@@ -79,12 +79,12 @@ class Atlas:
         if os.path.exists(fname):
             return fname
 
-        # Получаем загрузочную ссылку
+        # Get the download URL
         final_url = base_url + urlencode(dict(public_key=public_key))
         response = requests.get(final_url)
         download_url = response.json()['href']
 
-        # Загружаем файл и сохраняем его
+        # Download and save the file
         download_response = requests.get(download_url)
         with open(fname, 'wb') as f:
             f.write(download_response.content)
@@ -127,6 +127,6 @@ class Atlas:
                                  standardize=False, #'zscore_sample',
                                  detrend=True,
                                  resampling_target='data', #'labels'
-                                 n_jobs=-1 # fix 
+                                 n_jobs=-1
                                  )
         return mask

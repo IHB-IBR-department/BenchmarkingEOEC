@@ -457,44 +457,316 @@ python -m data_utils.preprocessing.icc_data_preparation \
 
 If `icc_precomputed_fc/` already contains older outputs computed with different settings (e.g. `--coverage none`), rerun with your desired options. The script validates existing shapes and recomputes stale outputs (use `--overwrite` to force full refresh).
 
+## Raw Data Preprocessing Pipeline
+
+This section describes the preprocessing steps applied to raw fMRI data before functional connectivity analysis. The preprocessing code is located in the `denoising/` directory.
+
+### Overview of Preprocessing Steps
+
+```
+Raw fMRI (NIfTI) → fMRIPrep → Confound Regression → Atlas Time Series → FC Matrices
+```
+
+1. **fMRIPrep**: Standard preprocessing (motion correction, normalization, etc.)
+2. **Confound Regression**: Removal of nuisance signals using various strategies
+3. **Atlas Extraction**: ROI time series extraction using brain parcellations
+4. **FC Computation**: Functional connectivity matrix estimation
+
+### fMRIPrep Preprocessing (External)
+
+Raw fMRI data was preprocessed using **fMRIPrep** (version specified in paper), which performs:
+
+- **Anatomical preprocessing**: Brain extraction, tissue segmentation, spatial normalization to MNI152NLin2009cAsym space
+- **Functional preprocessing**: Motion correction, slice timing correction, susceptibility distortion correction, registration to anatomical image, normalization to MNI space
+- **Confound estimation**: Motion parameters (6 realignment parameters + derivatives + squared terms), CompCor components (anatomical and temporal), global signal, framewise displacement, DVARS
+
+**Output**: Preprocessed BOLD images in MNI space + confounds TSV files
+
+### Denoising Pipeline (`denoising/`)
+
+The `denoising/` module implements confound regression and time series extraction from fMRIPrep outputs.
+
+#### Module Structure
+
+```
+denoising/
+├── __init__.py
+├── dataset.py      # BIDS dataset handling via PyBIDS
+├── atlas.py        # Atlas management and ROI masking
+├── denoise.py      # Standard denoising strategies (1-6)
+├── denoise_ica.py  # ICA-AROMA denoising strategies
+└── coverage.py     # ROI coverage quality assessment
+```
+
+#### Dataset Class (`dataset.py`)
+
+Wraps fMRIPrep derivatives using PyBIDS for standardized file access:
+
+```python
+from denoising.dataset import Dataset
+
+# Initialize dataset
+data = Dataset(
+    derivatives_path='/path/to/fmriprep/derivatives',
+    TR=2.5,           # Repetition time in seconds
+    sessions=1,       # Number of sessions
+    runs=3,           # Number of runs per subject
+    task='rest'       # Task name in BIDS
+)
+
+# Access subjects and files
+subjects = data.sub_labels
+func_files = data.get_func_files(sub='001')
+confounds = data.get_confounds_one_subject(sub='001')
+```
+
+#### Atlas Class (`atlas.py`)
+
+Manages brain atlases and time series extraction:
+
+```python
+from denoising.atlas import Atlas
+
+# Initialize atlas (auto-downloads if needed)
+atlas = Atlas(atlas_name='Schaefer200')  # Options: HCPex, Schaefer200, AAL, Brainnetome
+
+# Access atlas properties
+atlas_path = atlas.atlas_path      # Path to NIfTI atlas file
+labels = atlas.atlas_labels        # ROI labels
+masker = atlas.masker              # NiftiLabelsMasker instance
+```
+
+**Supported Atlases:**
+
+| Atlas | ROIs | Source | Auto-download |
+|-------|------|--------|---------------|
+| AAL | 116 | nilearn.datasets | Yes (nilearn) |
+| Schaefer200 | 200 | nilearn.datasets | Yes (nilearn) |
+| Brainnetome | 246 | Yandex Disk | Yes |
+| HCPex | 426 | Yandex Disk | Yes |
+
+**Time Series Extraction Parameters:**
+
+```python
+NiftiLabelsMasker(
+    labels_img=atlas_path,
+    standardize=False,      # No z-scoring during extraction
+    detrend=True,           # Linear detrending applied
+    resampling_target='data',  # Resample atlas to functional resolution
+    n_jobs=-1               # Parallel processing
+)
+```
+
+#### Denoising Class (`denoise.py`)
+
+Implements confound regression for standard strategies (1-6):
+
+```python
+from denoising.denoise import Denoising
+from denoising.dataset import Dataset
+from denoising.atlas import Atlas
+
+# Setup
+dataset = Dataset(derivatives_path, TR=2.5, sessions=1, runs=3, task='rest')
+atlas = Atlas('Schaefer200')
+
+# Initialize denoising with specific strategy
+denoiser = Denoising(
+    dataset=dataset,
+    atlas=atlas,
+    strategy=1,           # Strategy number (1-6)
+    n_compcor=10,         # Number of CompCor components (for strategies 2, 4)
+    use_GSR=True,         # Apply Global Signal Regression
+    smoothing=None        # Optional spatial smoothing FWHM
+)
+
+# Run denoising for all subjects
+denoised_ts = denoiser.denoise(
+    sub=None,             # None = all subjects
+    save_outputs=True,    # Save as CSV files
+    folder='/output/path'
+)
+```
+
+**Confound Loading**: Uses `nilearn.interfaces.fmriprep.load_confounds()` for standardized confound extraction.
+
+#### ICA-AROMA Denoising (`denoise_ica.py`)
+
+Handles fmripost-aroma outputs for ICA-based denoising:
+
+```python
+from denoising.denoise_ica import DenoiseAROMA
+
+# Initialize AROMA denoiser
+aroma = DenoiseAROMA(
+    aroma_deriv_dir='/path/to/fmripost-aroma/derivatives',
+    fmriprep_deriv_dir='/path/to/fmriprep/derivatives',
+    atlas_labels_img='/path/to/atlas.nii.gz',
+    aroma_desc='nonaggrDenoised',  # or 'aggrDenoised'
+    space='MNI152NLin6Asym',
+    compcor_kind='a',              # 'a' for aCompCor, 't' for tCompCor
+    n_compcor=None                 # None = use all available
+)
+
+# Denoise single subject
+roi_ts = aroma.denoise_one_subject(
+    subject='001',
+    task='rest',
+    run='1',
+    save_outputs=True,
+    folder='/output/path'
+)
+
+# Denoise all subjects
+results = aroma.denoise_many(subjects=None, task='rest', save_outputs=True)
+```
+
+**AROMA Workflow:**
+1. Load AROMA-denoised BOLD (aggressive or non-aggressive)
+2. Load fMRIPrep confounds TSV
+3. Select additional confounds (CompCor + cosine drifts)
+4. Apply confound regression during time series extraction
+5. Save ROI time series
+
+#### Coverage Analysis (`coverage.py`)
+
+Computes ROI coverage quality metrics:
+
+```python
+from denoising.coverage import coverage
+from denoising.atlas import Atlas
+
+atlas = Atlas('Schaefer200')
+mask = '/path/to/brain_mask.nii.gz'
+
+# Compute coverage (proportion of atlas voxels within brain mask)
+parcel_coverage = coverage(atlas, mask)
+# Returns: array of shape (n_rois,) with values 0.0-1.0
+```
+
+**Coverage Computation:**
+1. Binarize atlas (non-zero → 1)
+2. Count voxels per ROI within brain mask
+3. Count total voxels per ROI in atlas
+4. Compute ratio: `coverage = masked_voxels / total_voxels`
+
+### Output File Naming Convention
+
+Denoised time series are saved with the following naming pattern:
+
+```
+sub-{subject}_task-{task}_run-{run}_time-series_{atlas}_strategy-{strategy}[_GSR].csv
+```
+
+**Examples:**
+- `sub-001_task-rest_run-1_time-series_Schaefer200_strategy-1_GSR.csv`
+- `sub-001_task-rest_run-1_time-series_AAL_strategy-AROMA_nonaggrDenoised-noGSR.csv`
+
+### Aggregation to NumPy Arrays
+
+Individual CSV files are aggregated into NumPy arrays for efficient analysis:
+
+```python
+# Aggregation script (not in denoising/ module)
+# Produces: {site}_{condition}_{atlas}_strategy-{strategy}_{gsr}.npy
+
+# Shape: (n_subjects, n_timepoints, n_rois)
+# Example: ihb_close_Schaefer200_strategy-1_GSR.npy → (84, 120, 200)
+```
+
+---
+
 ## Denoising Strategies
 
-The study evaluates 8 denoising approaches:
+The study evaluates 8 denoising approaches, implemented via `nilearn.interfaces.fmriprep.load_confounds()`.
 
 ### Standard Strategies (1-6)
 
-| ID | Confound Regressors | Description |
-|----|---------------------|-------------|
-| 1 | 24P | 24 motion parameters only |
-| 2 | aCompCor(5) + 12P | 5 aCompCor components + 12 motion |
-| 3 | aCompCor(50%) + 12P | aCompCor 50% variance + 12 motion |
-| 4 | aCompCor(5) + 24P | 5 aCompCor components + 24 motion |
-| 5 | aCompCor(50%) + 24P | aCompCor 50% variance + 24 motion |
-| 6 | a/tCompCor(50%) + 24P | aCompCor + tCompCor 50% each + 24 motion |
+| ID | Confound Regressors | Description | Code Implementation |
+|----|---------------------|-------------|---------------------|
+| 1 | 24P | 24 motion parameters only | `motion='full'` |
+| 2 | aCompCor(5) + 12P | 5 aCompCor components + 12 motion | `motion='derivatives'`, `compcor='anat_combined'`, `n_compcor=5` |
+| 3 | aCompCor(50%) + 12P | aCompCor 50% variance + 12 motion | `motion='derivatives'`, `compcor='anat_combined'`, `n_compcor='all'` |
+| 4 | aCompCor(5) + 24P | 5 aCompCor components + 24 motion | `motion='full'`, `compcor='anat_combined'`, `n_compcor=5` |
+| 5 | aCompCor(50%) + 24P | aCompCor 50% variance + 24 motion | `motion='full'`, `compcor='anat_combined'`, `n_compcor='all'` |
+| 6 | a/tCompCor(50%) + 24P | aCompCor + tCompCor 50% each + 24 motion | `motion='full'`, `compcor='temporal_anat_combined'`, `n_compcor='all'` |
 
 **Motion parameters:**
-- 12P: 6 realignment + 6 temporal derivatives
-- 24P: 12P + 12 squared terms
+- **12P** (`motion='derivatives'`): 6 realignment parameters (3 translation + 3 rotation) + 6 temporal derivatives
+- **24P** (`motion='full'`): 12P + 12 squared terms (quadratic expansion)
 
-**CompCor:**
-- aCompCor: Anatomical (white matter + CSF)
-- tCompCor: Temporal (high-variance voxels)
+**CompCor (Component-based noise correction):**
+- **aCompCor** (`compcor='anat_combined'`): Principal components from anatomically-defined noise ROIs (white matter + CSF masks)
+- **tCompCor** (`compcor='temporal_anat_combined'`): Principal components from temporally-defined high-variance voxels, combined with aCompCor
+- **n_compcor=5**: Fixed number of top components
+- **n_compcor='all'**: Components explaining 50% cumulative variance
+
+**High-pass filtering:** Strategies 2-6 include `'high_pass'` in the strategy list (cosine basis regressors for drift removal).
 
 ### AROMA Strategies
 
-| ID | Description |
-|----|-------------|
-| AROMA_aggr | Aggressive denoising (full regression of noise ICs) |
-| AROMA_nonaggr | Non-aggressive denoising (partial regression) |
+ICA-AROMA (Independent Component Analysis - Automatic Removal of Motion Artifacts) uses a classifier to identify motion-related independent components.
 
-**Note:** AROMA strategies independently identify and remove motion-related independent components.
+| ID | Description | fmripost-aroma `desc` |
+|----|-------------|----------------------|
+| AROMA_aggr | Aggressive denoising: full regression of noise ICs from data | `aggrDenoised` |
+| AROMA_nonaggr | Non-aggressive denoising: partial regression preserving signal | `nonaggrDenoised` |
+
+**AROMA workflow:**
+1. ICA decomposition of preprocessed BOLD data
+2. Classification of ICs as signal or noise (motion-related)
+3. **Aggressive**: Remove noise ICs entirely via regression
+4. **Non-aggressive**: Remove only the variance in noise ICs that is orthogonal to signal ICs
+
+**Additional confounds for AROMA strategies:**
+- CompCor components (aCompCor by default)
+- Cosine basis functions (high-pass filtering)
 
 ### Global Signal Regression (GSR)
 
-Each strategy is computed **with and without GSR**, yielding:
-- 6 standard × 2 GSR = 12 variants
-- 2 AROMA × 2 GSR = 4 variants
+When GSR is enabled (`use_GSR=True`), 4 additional regressors are added:
+- Global signal (mean across all brain voxels)
+- Temporal derivative of global signal
+- Squared global signal
+- Squared derivative
+
+**Code:** `global_signal='full'` (4 parameters)
+
+**Pipeline combinations:**
+- 6 standard strategies × 2 GSR options = 12 variants
+- 2 AROMA strategies × 2 GSR options = 4 variants
 - **Total: 16 denoising pipelines per atlas**
+
+### Strategy Configuration Summary
+
+```python
+# Strategy 1: Motion only (24P)
+{'strategy': ['motion'], 'motion': 'full'}
+
+# Strategy 2: aCompCor(5) + 12P + high-pass
+{'strategy': ['motion', 'compcor', 'high_pass'],
+ 'motion': 'derivatives', 'compcor': 'anat_combined', 'n_compcor': 5}
+
+# Strategy 3: aCompCor(50%) + 12P + high-pass
+{'strategy': ['motion', 'compcor', 'high_pass'],
+ 'motion': 'derivatives', 'compcor': 'anat_combined', 'n_compcor': 'all'}
+
+# Strategy 4: aCompCor(5) + 24P + high-pass
+{'strategy': ['motion', 'compcor', 'high_pass'],
+ 'motion': 'full', 'compcor': 'anat_combined', 'n_compcor': 5}
+
+# Strategy 5: aCompCor(50%) + 24P + high-pass
+{'strategy': ['motion', 'compcor', 'high_pass'],
+ 'motion': 'full', 'compcor': 'anat_combined', 'n_compcor': 'all'}
+
+# Strategy 6: a/tCompCor(50%) + 24P + high-pass
+{'strategy': ['motion', 'compcor', 'high_pass'],
+ 'motion': 'full', 'compcor': 'temporal_anat_combined', 'n_compcor': 'all'}
+
+# With GSR (add to any strategy above)
+strategy['strategy'].append('global_signal')
+strategy['global_signal'] = 'full'
+```
 
 ## Functional Connectivity Methods
 

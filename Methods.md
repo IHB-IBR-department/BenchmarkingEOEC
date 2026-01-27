@@ -74,7 +74,59 @@ This study evaluates a total of **259+ distinct functional connectivity pipeline
 
 ---
 
-## 5. Data Access Statement
+## 5. Feature Interpretation via Subsampling Stability
+
+To identify robust biomarkers distinguishing Eyes Open (EO) from Eyes Closed (EC) states, we employ a **subject-level subsampling stability analysis** that assesses which FC edges consistently contribute to classification across random data partitions.
+
+### Motivation
+Single-model coefficients can be noisy and sensitive to specific training splits, especially in high-dimensional neuroimaging where `n_features >> n_samples`. By evaluating feature stability across many subsamples, we isolate true biological signals from noise.
+
+### Approach
+- **Pooled Dataset**: IHB (84 subjects) + China (48 subjects) = 132 subjects total.
+- **Atlas**: Schaefer200 (182 ROIs after coverage masking) with Yeo 7-network parcellation.
+- **Strategy**: 3 (aCompCor(50%)+12P) — best performing denoising strategy.
+- **FC Types**: Both Pearson Correlation and Tangent Space projection.
+
+### Procedure
+
+#### Step 1: Precompute FC on Full Dataset
+Both correlation and tangent FC matrices are computed **once** for all 132 subjects:
+- **Correlation**: Computed independently per subject.
+- **Tangent**: Reference covariance (Fréchet mean) fitted on the full pooled dataset, then all subjects projected to tangent space.
+
+This precomputation enables fast subsampling (~1.3 iterations/second vs ~0.07 without precomputation).
+
+#### Step 2: Subject-Level Subsampling Loop
+For each of S iterations (default: 1000):
+1. **Subsample**: Randomly select 80% of subjects (without replacement), stratified by site.
+2. **Paired Design**: If a subject is selected, both their EO and EC scans are included.
+3. **Select FC**: Retrieve precomputed correlation and tangent FC for selected subjects.
+4. **Fit Model**: `StandardScaler → PCA(95%) → Logistic Regression`.
+5. **Backproject**: Extract edge weights from PCA-space to original feature space.
+6. **Rank**: Compute importance ranks (1 = highest absolute weight).
+
+### Stability Metrics
+For each edge, we aggregate across S subsamples:
+- **Sign Consistency**: Fraction of subsamples where the edge has the same sign direction. Values near 1.0 indicate stable directionality; ~0.5 indicates random.
+- **Mean Rank**: Average importance rank across subsamples.
+- **Mean Weight**: Average coefficient magnitude and direction.
+
+### Selection Criteria for Stable Edges
+Edges are considered "relevant" if they satisfy:
+1. **High Stability**: Sign Consistency ≥ 80%
+2. **Top Importance**: Mean Rank ≤ 500 (top ~3% of edges)
+
+### Outputs
+- **Volcano plots**: Sign consistency vs. mean weight for each FC type.
+- **Network heatmaps**: 7×7 matrices showing count/importance of stable edges between Yeo networks.
+- **FC comparison**: Overlap analysis between correlation and tangent stable edges.
+
+### Implementation
+`analysis/interpret_classification_coefficients.py`
+
+---
+
+## 6. Data Access Statement
 
 - **Beijing EOEC Dataset**: Publicly available via [NITRC](https://fcon_1000.projects.nitrc.org/indi/retro/BeijingEOEC.html).
 - **IHB RAS Dataset**: Proprietary research data from the Institute of the Human Brain. Derivative time series and aggregated results are provided in the [repository's data releases], while raw NIfTI files are available upon reasonable request from the corresponding author, subject to ethics institutional board approval.
