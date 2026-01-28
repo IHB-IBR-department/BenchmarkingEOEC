@@ -1,6 +1,6 @@
 # BenchmarkingEOEC
 
-**Data Availability:** All data necessary to reproduce the results of this study (preprocessed timeseries, precomputed FC, and coverage masks) are available at: [https://disk.yandex.ru/d/kvxN8bP3xiw8nQ](https://disk.yandex.ru/d/kvxN8bP3xiw8nQ)
+**Data Availability:** All data necessary to reproduce the results of this study (preprocessed timeseries, precomputed FC, and coverage masks) are available at: [Yandex Disk](https://disk.yandex.ru/d/fNz33QPwJQj7HQ)
 
 Code for the paper:
 **Medvedeva T. et al. Benchmarking resting state fMRI connectivity pipelines for classification: Robust accuracy despite processing variability in cross-site eye state prediction // bioRxiv. – 2025. – С. 2025.10.20.683049.**

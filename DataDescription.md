@@ -1,6 +1,6 @@
 # Data Description for EOEC Benchmarking Study
 
-**Data Availability:** All data necessary to reproduce the results of this study (preprocessed timeseries, precomputed FC, and coverage masks) are available at: [https://disk.yandex.ru/d/kvxN8bP3xiw8nQ](https://disk.yandex.ru/d/kvxN8bP3xiw8nQ)
+**Data Availability:** All data necessary to reproduce the results of this study (preprocessed timeseries, precomputed FC, and coverage masks) are available at: [Yandex Disk](https://disk.yandex.ru/d/fNz33QPwJQj7HQ)
 
 **Note on Original Source:**
 - **Beijing EOEC Dataset**: Original raw data available at [NITRC](https://fcon_1000.projects.nitrc.org/indi/retro/BeijingEOEC.html). Financial support for the data used in this project was provided by a grant from the National Natural Science Foundation of China: 30770594 and a grant from the National High Technology Program of China (863): 2008AA02Z405.
