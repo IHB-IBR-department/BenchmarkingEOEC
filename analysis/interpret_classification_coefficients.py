@@ -252,8 +252,26 @@ def get_fc_for_subsample(fc_close, fc_open, selected_indices):
 
 def fit_and_backproject(X, y):
     """
-    Fit pipeline and backproject weights to edge space.
-    Returns: edge weights (n_edges,)
+    Fit pipeline and compute both backward model weights and forward model
+    activation patterns (Haufe et al., 2014).
+
+    The backward model weights w are the raw classifier coefficients back-projected
+    through PCA to edge space. They are extraction filters — NOT neurophysiologically
+    interpretable.
+
+    The forward model activation patterns a = Σ_x · w represent the covariance
+    between the input features and the classifier output. They indicate which
+    features modulate with the decoded signal and ARE neurophysiologically
+    interpretable (Haufe et al., 2014).
+
+    The activation pattern is computed efficiently via the PCA decomposition:
+        a_pca = explained_variance * w_pca   (element-wise)
+        a_edge = a_pca @ pca.components_
+    This is exact because discarded PCA dimensions are orthogonal to w.
+
+    Returns:
+        w_edge: backward model weights in edge space (n_edges,)
+        a_edge: forward model activation pattern in edge space (n_edges,)
     """
     scaler = StandardScaler()
     pca = PCA(n_components=0.95, random_state=42)
@@ -263,25 +281,41 @@ def fit_and_backproject(X, y):
     X_pca = pca.fit_transform(X_scaled)
     clf.fit(X_pca, y)
 
-    # Backproject: coef @ components
-    w_scaled = clf.coef_ @ pca.components_
-    return w_scaled.flatten()
+    w_pca = clf.coef_.flatten()  # (n_pca_components,)
+
+    # Backward model: back-project weights through PCA
+    w_edge = (w_pca @ pca.components_).flatten()  # (n_edges,)
+
+    # Forward model (Haufe transformation): activation pattern
+    # a = Σ_x · w, computed via PCA spectral decomposition:
+    # Since w lives in PCA subspace and Σ = V Λ V^T (+ orthogonal complement),
+    # a = V @ (Λ · w_pca), which is exact (orthogonal complement contributes 0).
+    a_pca = pca.explained_variance_ * w_pca  # (n_pca_components,)
+    a_edge = (a_pca @ pca.components_).flatten()  # (n_edges,)
+
+    return w_edge, a_edge
 
 
 def subsampling_analysis(fc_data, site_labels, n_subsamples):
     """
     Run subsampling analysis for both FC types using precomputed data.
 
+    For each subsample, computes both backward model weights and forward model
+    activation patterns (Haufe et al., 2014).
+
     Parameters:
         fc_data: dict with 'corr' and 'tangent' keys, each containing (fc_close, fc_open) tuple
         site_labels: list of site labels per subject
         n_subsamples: number of subsampling iterations
 
-    Returns: dict with weights and ranks for each FC type
+    Returns: dict with weights, activation patterns, and ranks for each FC type
     """
     print(f"Running {n_subsamples} subsampling iterations...")
 
-    results = {fc_type: {'weights': [], 'ranks': []} for fc_type in FC_TYPES}
+    results = {fc_type: {
+        'weights': [], 'activations': [],
+        'ranks_w': [], 'ranks_a': [],
+    } for fc_type in FC_TYPES}
 
     rng = np.random.default_rng(seed=42)
 
@@ -296,19 +330,23 @@ def subsampling_analysis(fc_data, site_labels, n_subsamples):
             fc_close, fc_open = fc_data[fc_type]
             X, y = get_fc_for_subsample(fc_close, fc_open, selected_indices)
 
-            w = fit_and_backproject(X, y)
+            w, a = fit_and_backproject(X, y)
 
             results[fc_type]['weights'].append(w)
+            results[fc_type]['activations'].append(a)
 
             # Compute ranks (1 = highest magnitude)
-            abs_w = np.abs(w)
-            ranks = np.argsort(np.argsort(-abs_w)) + 1
-            results[fc_type]['ranks'].append(ranks)
+            ranks_w = np.argsort(np.argsort(-np.abs(w))) + 1
+            ranks_a = np.argsort(np.argsort(-np.abs(a))) + 1
+            results[fc_type]['ranks_w'].append(ranks_w)
+            results[fc_type]['ranks_a'].append(ranks_a)
 
     # Stack results
     for fc_type in FC_TYPES:
         results[fc_type]['weights'] = np.vstack(results[fc_type]['weights'])
-        results[fc_type]['ranks'] = np.vstack(results[fc_type]['ranks'])
+        results[fc_type]['activations'] = np.vstack(results[fc_type]['activations'])
+        results[fc_type]['ranks_w'] = np.vstack(results[fc_type]['ranks_w'])
+        results[fc_type]['ranks_a'] = np.vstack(results[fc_type]['ranks_a'])
 
     return results
 
@@ -361,7 +399,7 @@ def aggregate_and_filter(weights_stack, ranks_stack, kept_networks, kept_names, 
     return df
 
 
-def visualize_stability_volcano(df, fc_type, output_dir):
+def visualize_stability_volcano(df, fc_type, output_dir, suffix=""):
     """Volcano plot: Stability vs Magnitude."""
     plt.figure(figsize=(10, 8))
 
@@ -383,13 +421,14 @@ def visualize_stability_volcano(df, fc_type, output_dir):
 
     plt.axhline(0.8, color='red', linestyle='--', linewidth=1)
 
-    plt.title(f"Edge Stability Analysis - {fc_type.upper()} (Subsampling n={len(df)})")
-    plt.xlabel("Mean Weight (Direction)")
+    model_label = "Haufe Pattern" if "haufe" in suffix else "Weight"
+    plt.title(f"Edge Stability - {fc_type.upper()} ({model_label}, n={len(df)})")
+    plt.xlabel(f"Mean {model_label} (Direction)")
     plt.ylabel("Sign Consistency")
     plt.legend(loc='lower right')
 
     plt.tight_layout()
-    plt.savefig(output_dir / f"stability_volcano_{fc_type}.png", dpi=300)
+    plt.savefig(output_dir / f"stability_volcano{suffix}_{fc_type}.png", dpi=300)
     plt.close()
 
 
@@ -472,80 +511,94 @@ def main(n_subsamples=N_SUBSAMPLES):
     print("4. Running Subsampling Analysis...")
     results = subsampling_analysis(fc_data, site_labels, n_subsamples)
 
+    # Process both backward (weights) and forward (Haufe activation patterns)
+    model_types = [
+        ("weights", "ranks_w", "backward", "weight"),
+        ("activations", "ranks_a", "haufe", "activation"),
+    ]
+
     print("5. Aggregating Results...")
-    dfs = {}
-    for fc_type in FC_TYPES:
-        df = aggregate_and_filter(
-            results[fc_type]['weights'],
-            results[fc_type]['ranks'],
-            kept_nets, kept_names, kept_indices,
-            fc_type
-        )
-        dfs[fc_type] = df
-
-        # Save full stats
-        df.to_csv(OUTPUT_DIR / f"edge_stability_stats_{fc_type}.csv", index=False)
-
-        # Filter and save relevant edges
-        relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)].copy()
-        print(f"  {fc_type.upper()}: Found {len(relevant_df)} relevant stable edges.")
-
-        # Separate EO and EC
-        eo_relevant = relevant_df[relevant_df['mean_weight'] > 0].copy()
-        ec_relevant = relevant_df[relevant_df['mean_weight'] < 0].copy()
-
-        eo_relevant.to_csv(OUTPUT_DIR / f"stable_edges_EO_{fc_type}.csv", index=False)
-        ec_relevant.to_csv(OUTPUT_DIR / f"stable_edges_EC_{fc_type}.csv", index=False)
-        relevant_df.to_csv(OUTPUT_DIR / f"stable_edges_{fc_type}.csv", index=False)
-
-    print("6. Visualizing...")
-    for fc_type in FC_TYPES:
-        df = dfs[fc_type]
-        visualize_stability_volcano(df, fc_type, FIGURES_DIR)
-
-        # Filter relevant
-        relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)].copy()
-        eo_relevant = relevant_df[relevant_df['mean_weight'] > 0].copy()
-        ec_relevant = relevant_df[relevant_df['mean_weight'] < 0].copy()
-
-        if not eo_relevant.empty:
-            eo_relevant['count'] = 1
-            visualize_network_matrix_lower(
-                eo_relevant, 'count',
-                f"Count of Stable Edges Favoring Eyes Open ({fc_type.upper()})",
-                FIGURES_DIR / f"heatmap_stable_EO_count_{fc_type}.png",
-                fmt=".0f"
+    all_dfs = {}
+    for values_key, ranks_key, model_label, metric_label in model_types:
+        print(f"\n  --- {model_label.upper()} model ({metric_label}s) ---")
+        dfs = {}
+        for fc_type in FC_TYPES:
+            df = aggregate_and_filter(
+                results[fc_type][values_key],
+                results[fc_type][ranks_key],
+                kept_nets, kept_names, kept_indices,
+                fc_type
             )
-            eo_relevant['abs_weight'] = eo_relevant['mean_weight'].abs()
-            visualize_network_matrix_lower(
-                eo_relevant, 'abs_weight',
-                f"Total Importance Favoring Eyes Open ({fc_type.upper()})",
-                FIGURES_DIR / f"heatmap_stable_EO_weight_{fc_type}.png",
-                fmt=".2f"
-            )
+            dfs[fc_type] = df
 
-        if not ec_relevant.empty:
-            ec_relevant['count'] = 1
-            visualize_network_matrix_lower(
-                ec_relevant, 'count',
-                f"Count of Stable Edges Favoring Eyes Closed ({fc_type.upper()})",
-                FIGURES_DIR / f"heatmap_stable_EC_count_{fc_type}.png",
-                fmt=".0f"
-            )
-            ec_relevant['abs_weight'] = ec_relevant['mean_weight'].abs()
-            visualize_network_matrix_lower(
-                ec_relevant, 'abs_weight',
-                f"Total Importance Favoring Eyes Closed ({fc_type.upper()})",
-                FIGURES_DIR / f"heatmap_stable_EC_weight_{fc_type}.png",
-                fmt=".2f"
-            )
+            # Save full stats
+            df.to_csv(OUTPUT_DIR / f"edge_stability_stats_{model_label}_{fc_type}.csv", index=False)
 
-    # FC comparison
-    visualize_fc_comparison(dfs['corr'], dfs['tangent'], FIGURES_DIR)
+            # Filter and save relevant edges
+            relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)].copy()
+            print(f"  {fc_type.upper()} ({model_label}): Found {len(relevant_df)} relevant stable edges.")
+
+            # Separate EO and EC
+            eo_relevant = relevant_df[relevant_df['mean_weight'] > 0].copy()
+            ec_relevant = relevant_df[relevant_df['mean_weight'] < 0].copy()
+
+            eo_relevant.to_csv(OUTPUT_DIR / f"stable_edges_EO_{model_label}_{fc_type}.csv", index=False)
+            ec_relevant.to_csv(OUTPUT_DIR / f"stable_edges_EC_{model_label}_{fc_type}.csv", index=False)
+            relevant_df.to_csv(OUTPUT_DIR / f"stable_edges_{model_label}_{fc_type}.csv", index=False)
+
+        all_dfs[model_label] = dfs
+
+    print("\n6. Visualizing...")
+    for model_label in ["backward", "haufe"]:
+        dfs = all_dfs[model_label]
+        for fc_type in FC_TYPES:
+            df = dfs[fc_type]
+            visualize_stability_volcano(df, fc_type, FIGURES_DIR,
+                                        suffix=f"_{model_label}")
+
+            # Filter relevant
+            relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)].copy()
+            eo_relevant = relevant_df[relevant_df['mean_weight'] > 0].copy()
+            ec_relevant = relevant_df[relevant_df['mean_weight'] < 0].copy()
+
+            label_prefix = "Haufe Pattern" if model_label == "haufe" else "Weight"
+
+            if not eo_relevant.empty:
+                eo_relevant['count'] = 1
+                visualize_network_matrix_lower(
+                    eo_relevant, 'count',
+                    f"Count of Stable Edges Favoring EO ({fc_type.upper()}, {label_prefix})",
+                    FIGURES_DIR / f"heatmap_stable_EO_count_{model_label}_{fc_type}.png",
+                    fmt=".0f"
+                )
+                eo_relevant['abs_weight'] = eo_relevant['mean_weight'].abs()
+                visualize_network_matrix_lower(
+                    eo_relevant, 'abs_weight',
+                    f"Total Importance Favoring EO ({fc_type.upper()}, {label_prefix})",
+                    FIGURES_DIR / f"heatmap_stable_EO_importance_{model_label}_{fc_type}.png",
+                    fmt=".2f"
+                )
+
+            if not ec_relevant.empty:
+                ec_relevant['count'] = 1
+                visualize_network_matrix_lower(
+                    ec_relevant, 'count',
+                    f"Count of Stable Edges Favoring EC ({fc_type.upper()}, {label_prefix})",
+                    FIGURES_DIR / f"heatmap_stable_EC_count_{model_label}_{fc_type}.png",
+                    fmt=".0f"
+                )
+                ec_relevant['abs_weight'] = ec_relevant['mean_weight'].abs()
+                visualize_network_matrix_lower(
+                    ec_relevant, 'abs_weight',
+                    f"Total Importance Favoring EC ({fc_type.upper()}, {label_prefix})",
+                    FIGURES_DIR / f"heatmap_stable_EC_importance_{model_label}_{fc_type}.png",
+                    fmt=".2f"
+                )
+
+    # FC comparison (Haufe patterns)
+    visualize_fc_comparison(all_dfs['haufe']['corr'], all_dfs['haufe']['tangent'], FIGURES_DIR)
 
     # --- Print Summary Conclusions ---
-    print("\n--- CONCLUSIONS: Top Network Pairs ---")
-
     def print_top_pairs(sub_df, label, fc_type):
         if sub_df.empty:
             print(f"\n{label} ({fc_type}): None found.")
@@ -558,14 +611,17 @@ def main(n_subsamples=N_SUBSAMPLES):
             count = len(sub_df[sub_df['network_pair'] == pair])
             print(f"  - {pair}: SumWeight={val:.3f}, Count={count}")
 
-    for fc_type in FC_TYPES:
-        df = dfs[fc_type]
-        relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)]
-        eo_relevant = relevant_df[relevant_df['mean_weight'] > 0]
-        ec_relevant = relevant_df[relevant_df['mean_weight'] < 0]
+    for model_label in ["backward", "haufe"]:
+        print(f"\n--- CONCLUSIONS: Top Network Pairs ({model_label.upper()} model) ---")
+        dfs = all_dfs[model_label]
+        for fc_type in FC_TYPES:
+            df = dfs[fc_type]
+            relevant_df = df[(df['sign_consistency'] >= 0.8) & (df['mean_rank'] <= 500)]
+            eo_relevant = relevant_df[relevant_df['mean_weight'] > 0]
+            ec_relevant = relevant_df[relevant_df['mean_weight'] < 0]
 
-        print_top_pairs(eo_relevant, "Top EO-Dominant Pairs", fc_type)
-        print_top_pairs(ec_relevant, "Top EC-Dominant Pairs", fc_type)
+            print_top_pairs(eo_relevant, "Top EO-Dominant Pairs", fc_type)
+            print_top_pairs(ec_relevant, "Top EC-Dominant Pairs", fc_type)
 
     print(f"\nDone! Results saved to {OUTPUT_DIR}")
 
